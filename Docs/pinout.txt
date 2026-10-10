@@ -1,0 +1,46 @@
+PA1: NC
+PA2: cruise
+
+PA4: reverse
+PA5: self study
+PA6: NC
+
+
+PB0: Phase A low side PWM
+PB1: Phase B low side PWM
+PB2: Phase C low side PWM
+PB3: low/high
+PB4: low pass filtered current
+PB5: battery voltage
+PB6: unfiltered current 
+PB7: throttle
+
+PC1: Phase A high side PWM
+PC2: Phase B high side PWM
+PC3: Phase C high side PWM
+
+PC5: hall effect position feedback sensor phase B
+PC6: back EMF phase C
+PC7: NC
+
+PD0: NC
+PD1: NC
+PD2: back EMF phase B
+PD3: hall effect position feedback sensor phase C
+PD4: back EMF enable? Or voltage low/high switching on back EMF?
+PD5: TTL serial to display
+PD6: NC
+PD7: NC
+
+PE0: NC
+PE1: back EMF phase A
+PE2: NC
+
+PE5: hall effect position feedback sensor phase A
+PE6: NC
+
+PG0: hard boot
+PG1: 3 speed
+
+
+

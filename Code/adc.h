@@ -1,0 +1,40 @@
+/*
+ * EGG OpenSource EBike firmware
+ *
+ * Copyright (C) Casainho, 2015, 2106, 2017.
+ *
+ * Released under the GPL License, Version 3
+ */
+
+#ifndef _ADC_H
+#define _ADC_H
+
+#include "main.h"
+
+// ADC channel definitions (updated for new hardware)
+#define ADC1_CHANNEL_PHASE_CURRENT_B 			ADC1_CHANNEL_6  // PB6: unfiltered current
+#define ADC1_CHANNEL_MOTOR_TOTAL_CURRENT		ADC1_CHANNEL_6  // PB6: unfiltered current
+#define ADC1_CHANNEL_MOTOR_TOTAL_CURRENT_FILTERED	ADC1_CHANNEL_4  // PB4: low pass filtered current
+#define ADC1_CHANNEL_BATTERY_VOLTAGE			ADC1_CHANNEL_5  // PB5: battery voltage
+#define ADC1_CHANNEL_THROTTLE				ADC1_CHANNEL_7  // PB7: throttle
+
+extern uint8_t adc_throttle_busy_flag;
+extern uint8_t ui8_BatteryCurrent;
+extern uint8_t ui8_adc_throttle_value;
+extern uint8_t ui8_motor_total_current_offset;
+extern uint16_t ui16_motor_total_current_offset_10b;
+
+void adc_init (void);
+inline void adc_trigger (void);
+uint8_t ui8_adc_read_phase_B_current (void);
+uint16_t ui16_adc_read_phase_B_current (void);
+uint8_t ui8_adc_read_throttle (void);
+uint16_t ui16_adc_read_x4_value (void);
+uint8_t ui8_adc_read_motor_total_current (void);
+uint16_t ui16_adc_read_motor_total_current (void);
+uint8_t ui8_adc_read_battery_voltage (void);
+uint16_t ui16_adc_read_battery_voltage (void);
+
+uint16_t ui16_adc_brandon(void);
+
+#endif /* _ADC_H */
