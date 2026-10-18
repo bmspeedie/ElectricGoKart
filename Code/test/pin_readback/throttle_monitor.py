@@ -127,7 +127,7 @@ def open_device():
     hdwf = c_int()
     cfg = pick_config()
     check(dwf.FDwfDeviceConfigOpen(c_int(0), c_int(cfg), byref(hdwf)), "open Analog Discovery")
-    enable_throttle_supply(hdwf)
+    # enable_throttle_supply(hdwf)  # nothing on the bench is powered from V+
     if hdwf.value == hdwfNone.value:
         raise RuntimeError(last_error())
     return hdwf
@@ -135,6 +135,8 @@ def open_device():
 
 def setup(hdwf):
     dwf.FDwfAnalogInChannelEnableSet(hdwf, c_int(0), c_int(1))
+    dwf.FDwfAnalogInChannelEnableSet(hdwf, c_int(1), c_int(1))
+    dwf.FDwfAnalogInChannelRangeSet(hdwf, c_int(1), c_double(25))
     dwf.FDwfAnalogInChannelOffsetSet(hdwf, c_int(0), c_double(0))
     dwf.FDwfAnalogInChannelRangeSet(hdwf, c_int(0), c_double(25))
     check(dwf.FDwfAnalogInConfigure(hdwf, c_int(1), c_int(0)), "analog configure")
@@ -292,6 +294,11 @@ def read_voltage(hdwf):
     sts = c_byte()
     dwf.FDwfAnalogInStatus(hdwf, c_int(0), byref(sts))
     check(dwf.FDwfAnalogInStatusSample(hdwf, c_int(0), byref(voltage)), "analog sample")
+    v2 = c_double()
+    dwf.FDwfAnalogInStatusSample(hdwf, c_int(1), byref(v2))
+    with lock:
+        state["ch2"] = v2.value
+        state["ch2_min"] = v2.value if state.get("ch2_min") is None else min(state["ch2_min"], v2.value)
     # V+ rail readback (actual, not setpoint)
     vplus = c_double()
     dwf.FDwfAnalogIOStatus(hdwf)
@@ -411,7 +418,7 @@ def read_uart(hdwf):
             history.append((round(now, 2), round(state["voltage"] or 0, 3), adc, parsed.get("duty"),
                             parsed.get("erps"), None if scope_erps is None else round(scope_erps, 1), parsed.get("hall"),
                             parsed.get("ang"), parsed.get("cur"), parsed.get("tmin"), parsed.get("tmax"), parsed.get("rst"), parsed.get("up"),
-                            round(state.get("vplus") or 0, 3), round(state.get("vplus_i") or 0, 4)))
+                            round(state.get("ch2") or 0, 3), round(state.get("ch2_min") or 0, 3)))
             if len(history) > 2000:
                 del history[:len(history) - 2000]
 
