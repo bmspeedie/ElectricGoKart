@@ -130,7 +130,7 @@ uint16_t aca_setpoint(uint16_t ui16_time_ticks_between_pas_interrupt, uint16_t s
 #endif
 
         if (!brake_is_set() && hall_sensors > 0 && hall_sensors < 7 && ui8_throttle_adc > i16_throttle_start) {
-            ui16_duty = (uint16_t) map(ui8_throttle_adc, i16_throttle_start, ADC_THROTTLE_MAX_VALUE, 0, GOKART_MAX_DUTY);
+            ui16_duty = (uint16_t) map(ui8_throttle_adc, i16_throttle_start, ADC_THROTTLE_MAX_VALUE, GOKART_MIN_DUTY, GOKART_MAX_DUTY);
         }
 
         ui16_sum_throttle = ui16_duty;

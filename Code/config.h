@@ -64,6 +64,10 @@
 #define GOKART_THROTTLE_DIRECT 1  // Direct throttle mapping without ramping
 #define GOKART_THROTTLE_DEADZONE 10  // counts above ADC_THROTTLE_MIN_VALUE before power starts
 #define GOKART_MAX_DUTY 100
+// Duty applied as soon as the throttle leaves the deadzone. Below ~22 the
+// motor only cogs/hunts at the edge of stall (dead time eats most of the
+// tiny applied voltage), so start the usable range there.
+#define GOKART_MIN_DUTY 22
 // Throttle ADC smoothing: exponential average over ~2^N of the 50 Hz samples
 // (2 -> ~80 ms). 0 disables. Added after the raw reading was seen jumping
 // +/-15 counts between consecutive loops with the motor running.

@@ -296,8 +296,12 @@ def read_voltage(hdwf):
     vplus = c_double()
     dwf.FDwfAnalogIOStatus(hdwf)
     dwf.FDwfAnalogIOChannelNodeStatus(hdwf, c_int(0), c_int(1), byref(vplus))
+    vplus_i = c_double()
+    dwf.FDwfAnalogIOChannelNodeStatus(hdwf, c_int(0), c_int(2), byref(vplus_i))
     with lock:
         state["vplus"] = vplus.value
+        state["vplus_i"] = vplus_i.value
+        state["vplus_min"] = vplus.value if state.get("vplus_min") is None else min(state["vplus_min"], vplus.value)
     return voltage.value
 
 
@@ -406,7 +410,8 @@ def read_uart(hdwf):
             scope_erps = state["hall_seq"]["erps"] if state["hall_seq"] else None
             history.append((round(now, 2), round(state["voltage"] or 0, 3), adc, parsed.get("duty"),
                             parsed.get("erps"), None if scope_erps is None else round(scope_erps, 1), parsed.get("hall"),
-                            parsed.get("ang"), parsed.get("cur"), parsed.get("tmin"), parsed.get("tmax"), parsed.get("rst"), parsed.get("up")))
+                            parsed.get("ang"), parsed.get("cur"), parsed.get("tmin"), parsed.get("tmax"), parsed.get("rst"), parsed.get("up"),
+                            round(state.get("vplus") or 0, 3), round(state.get("vplus_i") or 0, 4)))
             if len(history) > 2000:
                 del history[:len(history) - 2000]
 
