@@ -41,6 +41,9 @@ uint16_t ui16_adc_current_phase_B_filtered = 0;
 
 int8_t hall_sensors;
 int8_t hall_sensors_last = 0;
+uint16_t ui16_hall_changes = 0; // every hall state change seen by the MCU (wraps)
+uint16_t ui16_hall_invalid = 0; // of those, reads of 0 or 7
+static uint8_t ui8_hall_prev_read = 0;
 
 uint16_t ui16_ADC_iq_current_accumulated = 4096;
 uint16_t ui16_iq_current_ma = 0;
@@ -65,10 +68,26 @@ void hall_sensor_init(void) {
 
 void hall_sensors_read_and_action(void) {
 	// read hall sensors signal pins from individual ports (updated for new hardware)
+#ifdef GOKART_SWAP_PHASE_AC
+	// hall A and C exchanged to match the phase A<->C swap in pwm.c
+	uint8_t hall_a = (GPIO_ReadInputData(HALL_SENSOR_C__PORT) & HALL_SENSOR_C__PIN) ? 1 : 0;
+	uint8_t hall_b = (GPIO_ReadInputData(HALL_SENSOR_B__PORT) & HALL_SENSOR_B__PIN) ? 2 : 0;
+	uint8_t hall_c = (GPIO_ReadInputData(HALL_SENSOR_A__PORT) & HALL_SENSOR_A__PIN) ? 4 : 0;
+#else
 	uint8_t hall_a = (GPIO_ReadInputData(HALL_SENSOR_A__PORT) & HALL_SENSOR_A__PIN) ? 1 : 0;
 	uint8_t hall_b = (GPIO_ReadInputData(HALL_SENSOR_B__PORT) & HALL_SENSOR_B__PIN) ? 2 : 0;
 	uint8_t hall_c = (GPIO_ReadInputData(HALL_SENSOR_C__PORT) & HALL_SENSOR_C__PIN) ? 4 : 0;
+#endif
 	hall_sensors = hall_a | hall_b | hall_c;
+	if (hall_sensors != ui8_hall_prev_read) {
+		// bench telemetry: how many hall changes the MCU actually sees between
+		// consecutive reads (hall_sensors_last is forced to 0 while stopped)
+		ui8_hall_prev_read = hall_sensors;
+		ui16_hall_changes++;
+		if (hall_sensors == 0 || hall_sensors == 7) {
+			ui16_hall_invalid++;
+		}
+	}
 	if ((hall_sensors != hall_sensors_last) || (ui8_possible_motor_state == MOTOR_STATE_COAST)) // let's run the code when motor is stopped/coast so it can pick right motor position for correct startup
 	{
 		if (hall_sensors_last >0 && hall_sensors_last < 7) {
@@ -306,6 +325,6 @@ void watchdog_init(void) {
 	//  0.0001 = 2 * (1 / 128000) * 4 * R
 	//  R = 1.6 ; rounding to R = 2
 	//  R = 2 means a value of reload register = 1
-	IWDG_SetReload(2); // 187.5us; for some reason, a value of 1 don't work, only 2
+	IWDG_SetReload(16); // ~1 ms (was 2 = 187 us, which reset the MCU every few seconds on the go-kart build)
 	IWDG_ReloadCounter();
 }

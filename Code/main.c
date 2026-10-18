@@ -51,6 +51,11 @@ green = display rx
 uint16_t ui16_log1 = 0;
 uint8_t ui8_slowloop_flag = 0;
 uint8_t ui8_veryslowloop_counter = 0;
+#ifdef GOKART_MODE
+static uint32_t ui32_gk_cur_sum = 0;
+static uint16_t ui16_gk_cur_n = 0;
+static uint8_t ui8_gk_reset_flags = 0;
+#endif
 uint8_t ui8_ultraslowloop_counter = 0;
 uint16_t ui16_log2 = 0;
 uint8_t ui8_log = 0;
@@ -103,6 +108,11 @@ void UART2_IRQHandler(void) __interrupt(UART2_IRQHANDLER);
 /////////////////////////////////////////////////////////////////////////////////////////////
 
 int main(void) {
+#ifdef GOKART_MODE
+	// remember why we booted (RST_SR: 1 WWDG, 2 IWDG, 4 ILLOP, 8 SWIM, 16 EMC; 0 = power-on/NRST)
+	ui8_gk_reset_flags = *(volatile uint8_t *) 0x50B3;
+	*(volatile uint8_t *) 0x50B3 = 0x1F; // clear
+#endif
 	//set clock at the max 16MHz
 	CLK_HSIPrescalerConfig(CLK_PRESCALER_HSIDIV1);
 
@@ -163,6 +173,11 @@ int main(void) {
 	while (1) {
 
 		uart_send_if_avail();
+#ifdef GOKART_MODE
+		// average the total (shunt) current between telemetry reports
+		ui32_gk_cur_sum += ui16_adc_read_motor_total_current();
+		ui16_gk_cur_n++;
+#endif
 
 		updateSpeeds();
 		updatePasStatus();
@@ -173,6 +188,9 @@ int main(void) {
 
 		// scheduled update of setpoint and duty cycle (slow loop, 50 Hz)
 		if (ui8_slowloop_flag) {
+#ifdef DISPLAY_TYPE_KT_LCD3
+			display_tick();
+#endif
 			//printf("MainSlowLoop\r\n");
 			//send_message();
 		    debug_pin_set();
@@ -205,13 +223,38 @@ int main(void) {
 				ui8_ultraslowloop_counter++;
 				ui8_veryslowloop_counter = 0;
 
-				if (ui8_ultraslowloop_counter > 10) {
+				if (ui8_ultraslowloop_counter > 2) {
 					ui8_ultraslowloop_counter = 0;
 					ui8_uptime++;
-					printf("throttle: %u\r\n", ui16_adc_read_x4_value());
 				}
-				
-				
+
+#ifdef GOKART_MODE
+#if GOKART_ANGLE_SWEEP
+				// step the motor angle offset every ~3 s while the motor is being driven
+				{
+					static uint8_t ui8_sweep_tick = 0;
+					ui16_aca_flags &= ~ANGLE_CORRECTION_ENABLED; // hold the FOC correction neutral during the sweep
+					if (ui16_setpoint > 0 && ++ui8_sweep_tick >= 25) {
+						ui8_sweep_tick = 0;
+						ui8_s_motor_angle += GOKART_ANGLE_SWEEP_STEP;
+					}
+					if (ui8_s_motor_angle < GOKART_ANGLE_SWEEP_START || ui8_s_motor_angle > GOKART_ANGLE_SWEEP_END) {
+						ui8_s_motor_angle = GOKART_ANGLE_SWEEP_START;
+					}
+				}
+#endif
+				// bench telemetry for the throttle monitor, every ~120 ms,
+				// interleaved with the LCD3 frames (both use blocking TX)
+				// "cur" is the mean shunt-current ADC reading (10-bit) minus the zero-current calibration
+				{
+					int16_t i16_cur = ui16_gk_cur_n ? (int16_t) (ui32_gk_cur_sum / ui16_gk_cur_n) - (int16_t) ui16_current_cal_b : 0;
+					ui32_gk_cur_sum = 0;
+					ui16_gk_cur_n = 0;
+					printf("thr %u dr %u duty %u hall %d hc %u hi %u erps %u ang %u cur %d tmin %u tmax %u rst %u up %u\r\n", ui8_adc_read_throttle(), *(volatile uint8_t *) 0x5404, ui16_setpoint, (int) hall_sensors, ui16_hall_changes, ui16_hall_invalid, ui16_motor_speed_erps, ui8_s_motor_angle, i16_cur, ui8_gk_thr_min, ui8_gk_thr_max, ui8_gk_reset_flags, ui8_uptime);
+					ui8_gk_thr_min = ui8_gk_thr_max = 0;
+				}
+#endif
+
 
 #ifdef DIAGNOSTICS
 				//uint32_torquesensorCalibration=80;

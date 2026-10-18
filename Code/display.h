@@ -82,6 +82,8 @@ typedef struct _lcd_configuration_variables
   uint8_t ui8_c14;
 } struc_lcd_configuration_variables;
 
+void display_tick(void);
+
 #endif
 
 #endif

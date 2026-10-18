@@ -29,8 +29,14 @@
 // all values should be read by a slowloop_"readall/updatesensors, whatever" before calling it
 #include "brake.h"
 #include "adc.h" // FIXME ugly cross reference
+#include "motor.h"
+#include "stm8s_tim1.h"
 
 static uint32_t ui32_dutycycle; // local version of setpoint
+#ifdef GOKART_MODE
+uint8_t ui8_gk_thr_min = 0, ui8_gk_thr_max = 0; // raw throttle ADC spread since last telemetry report
+static uint16_t ui16_gk_thr_filt = 0;
+#endif
 
 static int8_t uint_PWM_Enable = 0; //flag for PWM state
 static uint16_t ui16_BatteryCurrent_accumulated = 2496L; //8x current offset, for filtering or Battery Current
@@ -99,37 +105,44 @@ void aca_setpoint_init(void) {
 
 uint16_t aca_setpoint(uint16_t ui16_time_ticks_between_pas_interrupt, uint16_t setpoint_old) {
 #ifdef GOKART_MODE
-    // Go-Kart mode: Direct throttle to power mapping
-    // select virtual erps speed based on speedsensor type
-    if (((ui16_aca_flags & EXTERNAL_SPEED_SENSOR) == EXTERNAL_SPEED_SENSOR)) {
-        ui16_virtual_erps_speed = (uint16_t) ((((uint32_t)ui8_gear_ratio) * ui32_speed_sensor_rpks) /1000); 
-    } else {
-        ui16_virtual_erps_speed = (uint16_t) ui32_erps_filtered;
-    }
+    /* Throttle sets duty directly. The bridge stays off until the throttle
+       leaves its rest deadzone, the brake is released, and the halls are valid. */
+    {
+        uint8_t ui8_throttle_raw = ui8_adc_read_throttle();
+        uint8_t ui8_throttle_adc;
+        int16_t i16_throttle_start = (int16_t) ADC_THROTTLE_MIN_VALUE + (int16_t) GOKART_THROTTLE_DEADZONE;
+        uint16_t ui16_duty = 0;
 
-    // Go-kart mode: Direct throttle control without speed limiting
-    uint32_current_target = ui16_current_cal_b; // reset target to zero
-    
-    // Direct throttle mapping to current target
-    float_temp = (float) ui16_sum_throttle;
-    float_temp = float_temp * (float) (ui16_battery_current_max_value) / 255.0 + (float) ui16_current_cal_b;
-    uint32_current_target = (uint32_t) float_temp;
-    
-    // Only apply basic safety limits
-    if (uint32_current_target > ui16_battery_current_max_value + ui16_current_cal_b) {
-        uint32_current_target = ui16_battery_current_max_value + ui16_current_cal_b;
+        // raw sample spread between telemetry reports (bench diagnostic)
+        if (ui8_gk_thr_min == 0 && ui8_gk_thr_max == 0) {
+            ui8_gk_thr_min = ui8_gk_thr_max = ui8_throttle_raw;
+        } else {
+            if (ui8_throttle_raw < ui8_gk_thr_min) ui8_gk_thr_min = ui8_throttle_raw;
+            if (ui8_throttle_raw > ui8_gk_thr_max) ui8_gk_thr_max = ui8_throttle_raw;
+        }
+#if GOKART_THROTTLE_FILTER_SHIFT > 0
+        // exponential average of the 50 Hz samples: time constant ~ 2^shift samples
+        if (ui16_gk_thr_filt == 0) ui16_gk_thr_filt = (uint16_t) ui8_throttle_raw << GOKART_THROTTLE_FILTER_SHIFT;
+        ui16_gk_thr_filt += ui8_throttle_raw - (ui16_gk_thr_filt >> GOKART_THROTTLE_FILTER_SHIFT);
+        ui8_throttle_adc = (uint8_t) (ui16_gk_thr_filt >> GOKART_THROTTLE_FILTER_SHIFT);
+#else
+        ui8_throttle_adc = ui8_throttle_raw;
+#endif
+
+        if (!brake_is_set() && hall_sensors > 0 && hall_sensors < 7 && ui8_throttle_adc > i16_throttle_start) {
+            ui16_duty = (uint16_t) map(ui8_throttle_adc, i16_throttle_start, ADC_THROTTLE_MAX_VALUE, 0, GOKART_MAX_DUTY);
+        }
+
+        ui16_sum_throttle = ui16_duty;
+        if (ui16_duty > 0) {
+            TIM1_CtrlPWMOutputs(ENABLE);
+            uint_PWM_Enable = 1;
+        } else {
+            TIM1_CtrlPWMOutputs(DISABLE);
+            uint_PWM_Enable = 0;
+        }
+        return ui16_duty;
     }
-    
-    // Phase current limiting for safety
-    if (setpoint_old > 0 && (uint32_current_target - ui16_current_cal_b)*255 / setpoint_old > PHASE_CURRENT_MAX_VALUE) {
-        uint32_current_target = (PHASE_CURRENT_MAX_VALUE) * setpoint_old / 255 + ui16_current_cal_b;
-    }
-    
-    // Send current target to PI-controller
-    ui32_dutycycle = PI_control(ui16_BatteryCurrent, uint32_current_target, uint_PWM_Enable);
-    
-    return cutoffSetpoint(ui32_dutycycle);
-    
 #else
     // Original e-bike mode code
     // select virtual erps speed based on speedsensor type

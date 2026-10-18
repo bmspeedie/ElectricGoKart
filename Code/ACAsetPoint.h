@@ -23,6 +23,7 @@
 
 uint16_t aca_setpoint (uint16_t ui16_time_ticks_between_pas_interrupt, uint16_t setpoint_old );
 void aca_setpoint_init(void);
+extern uint8_t ui8_gk_thr_min, ui8_gk_thr_max;
 
 #endif /* ACASETPOINT_H */
 

@@ -17,6 +17,7 @@
 #include "motor.h"
 #include "pwm.h"
 #include "ACAcontrollerState.h"
+#include "config.h"
 
 // PAS signal
 
@@ -38,6 +39,15 @@ void EXTI_PORTD_IRQHandler(void) __interrupt(EXTI_PORTD_IRQHANDLER)
 
 void PAS_init (void)
 {
+#ifdef GOKART_MODE
+  // No PAS sensor and no over-current comparator on the go-kart build (PD0 and
+  // PD7 are not connected). With the interrupt enabled, PWM noise picked up on
+  // the floating PD0 fired EXTI_PORTD, the handler then read the unconnected
+  // over-current pin as "tripped", disabled the bridge and spun until the
+  // watchdog reset the MCU -- a ~0.5 s drop-out every few seconds under load.
+  GPIO_Init(PAS__PORT, PAS__PIN, GPIO_MODE_IN_PU_NO_IT);
+  GPIO_Init(CURRENT_MOTOR_TOTAL_OVER__PORT, CURRENT_MOTOR_TOTAL_OVER__PIN, GPIO_MODE_IN_PU_NO_IT);
+#else
   //PAS pin as external input pin interrupt
   GPIO_Init(PAS__PORT,
 	    PAS__PIN,
@@ -46,6 +56,7 @@ void PAS_init (void)
   //initialize the Interrupt sensitivity: falling edge only
   EXTI_SetExtIntSensitivity(EXTI_PORT_GPIOD,
 			    EXTI_SENSITIVITY_FALL_ONLY);
+#endif
 }
 
 

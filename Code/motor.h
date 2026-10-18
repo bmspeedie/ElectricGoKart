@@ -18,6 +18,9 @@
 #define MOTOR_STATE_RUNNING_INTERPOLATION_60 2
 #define MOTOR_STATE_RUNNING_INTERPOLATION_360 3
 
+extern int8_t hall_sensors;
+extern uint16_t ui16_hall_changes;
+extern uint16_t ui16_hall_invalid;
 extern uint8_t ui8_sinetable_position;
 extern uint16_t ui16_speed_inverse;
 extern uint16_t ui16_PWM_cycles_counter_total;

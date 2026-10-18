@@ -38,6 +38,7 @@ void adc_init(void) {
             DISABLE);
 
     ADC1_ScanModeCmd(ENABLE);
+    ADC1_DataBufferCmd(ENABLE); // scan results land in DB0..DB7, which the read functions use
     ADC1_Cmd(ENABLE);
 
     //********************************************************************************
@@ -88,7 +89,8 @@ void adc_init(void) {
 inline void adc_trigger(void) //inline ?!
 {
     // start ADC all channels, scan conversion (buffered)
-    ADC1->CSR &= 0x09; // clear EOC flag first (selected also channel 9)
+    // clear EOC/AWD and interrupt enables, keep CH[3:0] so the scan still runs 0..7
+    ADC1->CSR &= 0x0F;
     ADC1_StartConversion();
 }
 
@@ -114,10 +116,9 @@ uint16_t ui16_adc_read_phase_B_current(void) {
 }
 
 uint8_t ui8_adc_read_throttle(void) {
-    // throttle --> ADC_AIN7 (PB7: throttle)
+    // throttle --> ADC_AIN7 (PB7: throttle), left aligned, high byte is the 8-bit value
     // 0x53E0 + 2*7 = 0x53EE
-    //return *(uint8_t*) (0x53EE);
-    return *(uint8_t*) (0x53EF);
+    return *(uint8_t*) (0x53EE);
 }
 
 uint16_t ui16_adc_brandon(void) {

@@ -31,6 +31,7 @@ Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 #include "ACAeeprom.h"
 #include "interrupts.h"
 #include "ACAcontrollerState.h"
+#include "ACAcommons.h"
 
 #ifdef DISPLAY_TYPE_KT_LCD3
 
@@ -44,9 +45,55 @@ uint8_t ui8_tx_buffer[12];
 uint8_t ui8_j;
 uint8_t ui8_crc;
 uint16_t ui16_wheel_period_ms = 4500;
-uint16_t ui16_battery_bars_calc = 0;
-uint8_t ui8_battery_soc = 12;
+uint8_t ui8_throttle_percent = 0;
+uint8_t ui8_battery_soc = 0;
 uint8_t ui16_error;
+
+/* Battery icon. B1 codes from the KT-LCD3 protocol: 1 = border flashing
+ * (under voltage), 3 = empty box, 4/8/12/16 = 1..4 bars. Thresholds are
+ * in tenths of a volt across the LCD3_BATTERY_EMPTY_DV..FULL_DV span. */
+#define BATTERY_LEVELS 6
+#define BATTERY_SPAN_DV (LCD3_BATTERY_FULL_DV - LCD3_BATTERY_EMPTY_DV)
+static const uint8_t ui8_battery_codes[BATTERY_LEVELS] = {1, 3, 4, 8, 12, 16};
+static const uint16_t ui16_battery_min_dv[BATTERY_LEVELS] = {
+	0,
+	LCD3_BATTERY_EMPTY_DV,                              // empty box
+	LCD3_BATTERY_EMPTY_DV + BATTERY_SPAN_DV / 10,       // 1 bar  at 10 %
+	LCD3_BATTERY_EMPTY_DV + BATTERY_SPAN_DV / 4,        // 2 bars at 25 %
+	LCD3_BATTERY_EMPTY_DV + BATTERY_SPAN_DV / 2,        // 3 bars at 50 %
+	LCD3_BATTERY_EMPTY_DV + (BATTERY_SPAN_DV * 3) / 4,  // 4 bars at 75 %
+};
+static uint8_t ui8_battery_level = 0;
+static uint16_t ui16_battery_adc_acc = 0;
+static uint8_t ui8_send_tick = 0;
+
+/* Pack voltage in tenths of a volt from the filtered 10 bit ADC reading,
+ * using the same calibration constant the rest of the firmware uses. */
+static uint16_t battery_decivolts(void) {
+	uint32_t acc = (uint32_t) (ui16_battery_adc_acc >> 4) * ui8_s_battery_voltage_calibration * 10;
+	return (uint16_t) (acc >> 10);
+}
+
+static void update_battery_level(void) {
+	uint16_t dv;
+	uint8_t level;
+
+	// 16 sample running average, updated at 50 Hz
+	ui16_battery_adc_acc -= ui16_battery_adc_acc >> 4;
+	ui16_battery_adc_acc += ui16_adc_read_battery_voltage();
+	dv = battery_decivolts();
+
+	level = 0;
+	while (level + 1 < BATTERY_LEVELS && dv >= ui16_battery_min_dv[level + 1]) {
+		level++;
+	}
+	// hysteresis: only step up once clear of the threshold
+	if (level > ui8_battery_level && dv < ui16_battery_min_dv[level] + LCD3_BATTERY_HYST_DV) {
+		level = ui8_battery_level;
+	}
+	ui8_battery_level = level;
+	ui8_battery_soc = ui8_battery_codes[level];
+}
 uint8_t ui8_rx_buffer[13];
 uint8_t ui8_rx_buffer_counter = 0;
 uint8_t ui8_byte_received;
@@ -56,10 +103,46 @@ uint8_t ui8_UARTCounter = 0;
 volatile struc_lcd_configuration_variables lcd_configuration_variables;
 
 void display_init(){
-	// noop just here to have a common interface
+	// 0x00 is a valid wheel code (16"), so mark it unset until the LCD talks
+	lcd_configuration_variables.ui8_wheel_size = 0xff;
 }
 
-void send_message() {
+static void send_message(void);
+
+/* Wheel circumference in mm for the wheel size code the LCD3 sends us
+ * (see LCD3_to_S12SN-1.txt). 25.4 * pi = 79.8 mm per inch of diameter. */
+static uint16_t wheel_circumference_mm(void) {
+	uint8_t inches;
+	switch (lcd_configuration_variables.ui8_wheel_size) {
+		case 0x0e: inches = 10; break;
+		case 0x02: inches = 12; break;
+		case 0x06: inches = 14; break;
+		case 0x00: inches = 16; break;
+		case 0x04: inches = 18; break;
+		case 0x08: inches = 20; break;
+		case 0x0c: inches = 22; break;
+		case 0x10: inches = 24; break;
+		case 0x14: inches = 26; break;
+		case 0x18: inches = 28; break; // 700c
+		default:   inches = LCD3_DEFAULT_WHEEL_INCH; break;
+	}
+	return (uint16_t) (((uint16_t) inches * 798 + 5) / 10);
+}
+
+/* Battery current in 0.25 A steps for B8, clamped to 0..255. */
+static uint8_t battery_current_quarter_amps(void) {
+	uint16_t adc = ui16_adc_read_x4_value();
+	uint32_t qa;
+	// a few counts of noise around the boot offset would otherwise show as watts at idle
+	if (adc <= ui16_x4_cal_b + LCD3_CURRENT_DEADBAND) {
+		return 0;
+	}
+	// amps = counts * 10 / current_cal_a, quarter amps = counts * 40 / cal_a
+	qa = ((uint32_t) (adc - ui16_x4_cal_b) * 40 + (ui8_current_cal_a >> 1)) / ui8_current_cal_a;
+	return qa > 255 ? 255 : (uint8_t) qa;
+}
+
+static void send_message(void) {
 
 	// prepare moving indication info
 	ui8_moving_indication = 0;
@@ -71,41 +154,19 @@ void send_message() {
 	//if (pas_is_set ()) { ui8_moving_indication |= (1 << 4); }
 
 
-	if (((ui16_aca_flags & EXTERNAL_SPEED_SENSOR) == EXTERNAL_SPEED_SENSOR)) {
-		if (ui16_time_ticks_between_speed_interrupt > 65000) {
-			ui16_wheel_period_ms = 4500;
-		} else {
-			ui16_wheel_period_ms = (uint16_t) ((float) ui16_time_ticks_between_speed_interrupt / ((float) ui16_pwm_cycles_second / 1000.0)); //must be /1000 devided in /125/8 for better resolution
-		}
-	}else{
-		if (ui32_erps_filtered == 0) {
-			ui16_wheel_period_ms = 4500;
-		} else {
-			ui16_wheel_period_ms = (uint16_t) (1000.0 * (float) ui8_gear_ratio / (float) ui32_erps_filtered);
-		}
+	// Throttle position, 0..100 over the calibrated ADC range, read raw
+	// so there is no filtering on the controller side.
+	ui8_throttle_percent = (uint8_t) map(ui8_adc_read_throttle(), ADC_THROTTLE_MIN_VALUE, ADC_THROTTLE_MAX_VALUE, 0, 100);
+
+	// Show throttle percent in the speed digits. The LCD turns the wheel
+	// period into km/h with the wheel size set in its own menu, so use the
+	// size it reports back to us: period_ms = circumference_mm * 3.6 / kmh.
+	if (ui8_throttle_percent == 0) {
+		ui16_wheel_period_ms = 4500; // reads as 0
+	} else {
+		uint32_t period = ((uint32_t) wheel_circumference_mm() * 36) / ((uint16_t) ui8_throttle_percent * 10);
+		ui16_wheel_period_ms = period > 4500 ? 4500 : (uint16_t) period;
 	}
-
-	// calc battery pack state of charge (SOC)
-	ui16_battery_bars_calc = ui8_adc_read_battery_voltage() - ui8_s_battery_voltage_min;
-	ui16_battery_bars_calc<<=8;
-	ui16_battery_bars_calc /=(ui8_s_battery_voltage_max-ui8_s_battery_voltage_min);
-
-	
-	if (ui16_battery_bars_calc > 200) {
-		ui8_battery_soc = 16;
-	}// 4 bars | full
-	else if (ui16_battery_bars_calc > 150) {
-		ui8_battery_soc = 12;
-	}// 3 bars
-	else if (ui16_battery_bars_calc > 100) {
-		ui8_battery_soc = 8;
-	}// 2 bars
-	else if (ui16_battery_bars_calc > 50) {
-		ui8_battery_soc = 4;
-	}// 1 bar
-	else {
-		ui8_battery_soc = 3;
-	} // empty
 
 	ui8_tx_buffer [0] = 65;
 	// B1: battery level
@@ -131,17 +192,14 @@ void send_message() {
 	// B7: moving mode indication, bit
 	// throttle: 2
 	ui8_tx_buffer [7] = ui8_moving_indication;
-	// B8: 4x controller current
-	// Vbat = 30V:
-	// - B8 = 255, LCD shows 1912 watts
-	// - B8 = 250, LCD shows 1875 watts
-	// - B8 = 100, LCD shows 750 watts
-	// each unit of B8 = 0.25A
+	// B8: battery current in 0.25 A units; the LCD multiplies by its own
+	// voltage reading to show watts. Taken from the low-pass filtered
+	// current channel against the zero offset measured at boot, with
+	// current_cal_a counts per 10 A as elsewhere in the firmware.
+	ui8_tx_buffer [8] = battery_current_quarter_amps();
 
-
-	ui8_tx_buffer [8] = (uint8_t) ((((ui16_BatteryCurrent - ui16_current_cal_b + 1) << 2)*10) / ui8_current_cal_a);
-	// B9: motor temperature
-	ui8_tx_buffer [9] = i8_motor_temperature - 15; //according to documentation at endless sphere
+	// B9: motor temperature, degrees = B9 + 15
+	ui8_tx_buffer [9] = i8_motor_temperature - 15;
 	// B10 and B11: 0
 	ui8_tx_buffer [10] = 0;
 	ui8_tx_buffer [11] = 0;
@@ -157,6 +215,19 @@ void send_message() {
 	for (ui8_j = 0; ui8_j <= 11; ui8_j++) {
 		uart_put_buffered(ui8_tx_buffer [ui8_j]);
 	}
+}
+
+/* Called from the 50 Hz loop. The battery filter runs every tick; a frame
+ * goes out every 40 ms (a 12 byte frame takes 12.5 ms at 9600 baud) so the
+ * throttle readout tracks as fast as the LCD will follow. */
+void display_tick(void) {
+	update_battery_level();
+
+	if (++ui8_send_tick < 2) {
+		return;
+	}
+	ui8_send_tick = 0;
+	send_message();
 }
 
 /********************************************************************************************/

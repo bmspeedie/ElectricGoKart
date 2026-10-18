@@ -16,6 +16,7 @@
 #include "cruise_control.h"
 #include "motor.h"
 #include "pwm.h"
+#include "config.h"
 
 // Brake signal
 void EXTI_PORTA_IRQHandler(void) __interrupt(EXTI_PORTA_IRQHANDLER)
@@ -36,9 +37,16 @@ void EXTI_PORTA_IRQHandler(void) __interrupt(EXTI_PORTA_IRQHANDLER)
 void brake_init (void)
 {
   //hall sensors pins as external input pin interrupt
+#ifdef GOKART_MODE
+  // pull-up so an unconnected brake input reads "not braking" instead of floating
+  GPIO_Init(BRAKE__PORT,
+	    BRAKE__PIN,
+	    GPIO_MODE_IN_PU_IT);
+#else
   GPIO_Init(BRAKE__PORT,
 	    BRAKE__PIN,
 	    GPIO_MODE_IN_FL_IT); // with external interrupt
+#endif
 
   //initialize the Interrupt sensitivity
   EXTI_SetExtIntSensitivity(EXTI_PORT_GPIOA,
