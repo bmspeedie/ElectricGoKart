@@ -43,7 +43,29 @@ int8_t hall_sensors;
 int8_t hall_sensors_last = 0;
 uint16_t ui16_hall_changes = 0; // every hall state change seen by the MCU (wraps)
 uint16_t ui16_hall_invalid = 0; // of those, reads of 0 or 7
+uint16_t ui16_hall_erevs = 0; // full electrical revolutions (erps update points), wraps
+uint16_t ui16_hall_back = 0; // changes that step backwards through the 6-state cycle (incl. A-B-A bounce)
+uint16_t ui16_hall_seq_err = 0; // changes to a non-neighbour state: 2-bit jumps, 0 or 7
+uint16_t ui16_hall_masked = 0; // raw changes ignored by the edge lockout
+static uint16_t ui16_hall_lockout = 0; // PWM cycles left in the current lockout
 static uint8_t ui8_hall_prev_read = 0;
+// firmware forward order is 4,6,2,3,1,5 (see the switch below); indexed by current state
+static const uint8_t ui8_hall_fwd_next[8] = {0, 5, 3, 1, 6, 4, 2, 0};
+static const uint8_t ui8_hall_back_next[8] = {0, 3, 6, 2, 5, 1, 4, 0};
+#if GOKART_HALL_TRACE
+// Per hall change: the state just left and how many PWM cycles (64 us) it
+// lasted, capped at 255. 16-entry ring; a backward step while turning keeps
+// 8 more changes then freezes for the main loop to print.
+uint8_t ui8_hall_trace_state[16];
+uint8_t ui8_hall_trace_dwell[16];
+uint8_t ui8_hall_trace_pos = 0; // next write index = oldest entry once frozen
+uint8_t ui8_hall_trace_frozen = 0; // 1: holding a capture for the main loop to print
+static uint8_t ui8_hall_trace_post = 0; // changes still to record after the trigger
+static uint8_t ui8_hall_dwell = 0; // PWM cycles in the current raw state
+#define HALL_TRACE_TRIGGER() do { if (!ui8_hall_trace_frozen && ui8_hall_trace_post == 0 && ui16_motor_speed_erps > 3) ui8_hall_trace_post = 8; } while (0)
+#else
+#define HALL_TRACE_TRIGGER() do {} while (0)
+#endif
 
 uint16_t ui16_ADC_iq_current_accumulated = 4096;
 uint16_t ui16_iq_current_ma = 0;
@@ -79,9 +101,61 @@ void hall_sensors_read_and_action(void) {
 	uint8_t hall_c = (GPIO_ReadInputData(HALL_SENSOR_C__PORT) & HALL_SENSOR_C__PIN) ? 4 : 0;
 #endif
 	hall_sensors = hall_a | hall_b | hall_c;
+#if GOKART_HALL_LOCKOUT_PCT > 0
+	// Edge lockout: after an accepted change, hold the accepted state for a
+	// fixed fraction of the measured electrical revolution so the sensor's
+	// dither around the edge (see config.h) is never followed.
+	if (ui16_hall_lockout) {
+		ui16_hall_lockout--;
+		if (hall_sensors != ui8_hall_prev_read) {
+			ui16_hall_masked++;
+			hall_sensors = ui8_hall_prev_read;
+		}
+	} else if (hall_sensors != ui8_hall_prev_read && ui16_motor_speed_erps > 3 && ui16_PWM_cycles_counter_total < 0xffff) {
+		// total * pct/100 as a multiply and shift (pct 7 -> 18/256 = 7.03 %)
+		ui16_hall_lockout = (uint16_t) (((uint32_t) ui16_PWM_cycles_counter_total * ((GOKART_HALL_LOCKOUT_PCT * 256 + 50) / 100)) >> 8);
+	}
+#endif
+#if GOKART_HALL_TRACE
+	if (ui8_hall_dwell < 255) ui8_hall_dwell++;
+	if (hall_sensors != ui8_hall_prev_read) {
+		if (!ui8_hall_trace_frozen) {
+			ui8_hall_trace_state[ui8_hall_trace_pos] = ui8_hall_prev_read;
+			ui8_hall_trace_dwell[ui8_hall_trace_pos] = ui8_hall_dwell;
+			ui8_hall_trace_pos = (ui8_hall_trace_pos + 1) & 15;
+			if (ui8_hall_trace_post && --ui8_hall_trace_post == 0) {
+				ui8_hall_trace_frozen = 1;
+			}
+		}
+		ui8_hall_dwell = 0;
+	}
+#endif
+#if GOKART_HALL_REJECT_BACKSTEP
+	// Bench, 31 Oct: 45 % of hall edges were read as A-B-A-B at the 64 us
+	// sampling (slow edge plus supply ripple crossing the input threshold
+	// twice), never an invalid state or a two-bit jump. The kart only drives
+	// forward, so while the motor is known to be turning a step backwards
+	// through the cycle is taken as bounce and the previous state is kept.
+	// erps is only non-zero after forward rotation has been measured, so at
+	// standstill (rotor moved by hand, rocking at start) every read is accepted.
+	if (ui16_motor_speed_erps > 3 && ui8_hall_prev_read > 0 && ui8_hall_prev_read < 7
+			&& (uint8_t) hall_sensors == ui8_hall_back_next[ui8_hall_prev_read]) {
+		ui16_hall_back++; // counted, then ignored
+		HALL_TRACE_TRIGGER();
+		hall_sensors = ui8_hall_prev_read;
+	}
+#endif
 	if (hall_sensors != ui8_hall_prev_read) {
 		// bench telemetry: how many hall changes the MCU actually sees between
 		// consecutive reads (hall_sensors_last is forced to 0 while stopped)
+		if (ui8_hall_prev_read > 0 && ui8_hall_prev_read < 7) {
+			if ((uint8_t) hall_sensors == ui8_hall_back_next[ui8_hall_prev_read]) {
+				ui16_hall_back++;
+				HALL_TRACE_TRIGGER();
+			} else if ((uint8_t) hall_sensors != ui8_hall_fwd_next[ui8_hall_prev_read]) {
+				ui16_hall_seq_err++;
+			}
+		}
 		ui8_hall_prev_read = hall_sensors;
 		ui16_hall_changes++;
 		if (hall_sensors == 0 || hall_sensors == 7) {
@@ -114,6 +188,7 @@ void hall_sensors_read_and_action(void) {
 					if (ui16_PWM_cycles_counter > 20) ui16_PWM_cycles_counter_total = ui16_PWM_cycles_counter;
 
 					ui16_PWM_cycles_counter = 0;
+					ui16_hall_erevs++;
 					ui16_motor_speed_erps = ((uint16_t) ui16_pwm_cycles_second) / ui16_PWM_cycles_counter_total; // this division takes ~4.2us
 
 				}

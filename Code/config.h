@@ -63,20 +63,72 @@
 #define GOKART_MAX_SPEED_KPH 80  // Maximum speed for go-kart
 #define GOKART_THROTTLE_DIRECT 1  // Direct throttle mapping without ramping
 #define GOKART_THROTTLE_DEADZONE 10  // counts above ADC_THROTTLE_MIN_VALUE before power starts
-#define GOKART_MAX_DUTY 100
+#define GOKART_MAX_DUTY 255
 // Duty applied as soon as the throttle leaves the deadzone. Below ~22 the
 // motor only cogs/hunts at the edge of stall (dead time eats most of the
 // tiny applied voltage), so start the usable range there.
 #define GOKART_MIN_DUTY 22
-// Throttle ADC smoothing: exponential average over ~2^N of the 50 Hz samples
-// (2 -> ~80 ms). 0 disables. Added after the raw reading was seen jumping
-// +/-15 counts between consecutive loops with the motor running.
-#define GOKART_THROTTLE_FILTER_SHIFT 2  // throttle span maps to 0..this, out of 255
+// Throttle ADC noise rejection. Bench data (hold test, 31 Oct): with the foot
+// steady the raw reading sits within 0-2 counts most of the time but throws
+// isolated single-sample spikes of 5-25 counts (one of 46). Averaging smears
+// each spike into an 80 ms bump that the motor follows; a median drops it.
+// Filters are applied in this order:
+// 1. Median of the last 3 samples: removes any single-sample outlier, costs at
+//    most one 20 ms tick of delay on a real step. 0 disables.
+#define GOKART_THROTTLE_MEDIAN3 1
+// 2. Hysteresis deadband: the accepted value only moves when the median is
+//    more than this many ADC counts away from it, then jumps straight to the
+//    new value. Kills +/-1..2 count dither with no delay on real moves.
+//    ~1.65 ADC counts per duty step, so 2 counts is ~1 duty step. 0 disables.
+#define GOKART_THROTTLE_DEADBAND 2
+// 3. Exponential average over ~2^N samples (2 -> ~80 ms). Off: it slows the
+//    response and only attenuates spikes rather than rejecting them.
+#define GOKART_THROTTLE_FILTER_SHIFT 0
+// Bench test for hunting: when the throttle leaves the deadzone, sample it
+// once and hold that duty for this many 50 Hz ticks (250 = 5 s) no matter
+// what the throttle reading does, then re-sample and hold again. Releasing
+// the throttle, braking or an invalid hall state still stops immediately.
+// Motor still hunts with duty frozen -> motor side (commutation/angle/halls).
+// Motor runs smooth with duty frozen -> analog side (throttle reading).
+// 0 disables and restores live throttle control.
+// Result 31 Oct: speed was solid with the duty frozen -> the hunting was the
+// analog reading. Filters above added in response; hold test off since.
+#define GOKART_THROTTLE_HOLD_TICKS 0
 // The go-kart motor is wired so it turns in this firmware's "reverse" sense:
 // hall base angles step backwards while the 60-degree interpolation steps
 // forwards. Swapping phase A<->C and hall A<->C in software (same as
 // swapping two motor wires and two hall wires) makes the sequence forward.
 #define GOKART_SWAP_PHASE_AC 1
+// Hall edge bounce rejection. Bench, 31 Oct: the MCU saw 1.91 hall changes
+// per expected change (21019 over 1837 electrical revs), 4996 of them steps
+// backwards through the cycle, 0 invalid states, 0 two-bit jumps: 45 % of
+// edges read A-B-A-B. While the motor is turning (erps > 3) a backward step
+// is ignored and the previous state kept. "hb" in the telemetry counts them.
+// 0 disables.
+// Tried 31 Oct: hunting got worse. hb went to 63526 in one run (~2.8 rejected
+// reads per edge, so the "back" state lasts ~180 us, not one sample) and the
+// rejection also fought the rotor genuinely rocking at start-up. Off.
+#define GOKART_HALL_REJECT_BACKSTEP 0
+// Hall edge lockout. Dwell traces (31 Oct) showed the dither window around a
+// bad edge is a fixed angle, up to ~6 % of an electrical revolution, and the
+// true edge sits inside it (dwell before the bounce matches a clean sector
+// measured to the early flip, dwell after matches measured from the final
+// flip). The shortest real sector is ~37 deg = 10 %. So: accept the first
+// change, then ignore the halls for this percentage of the last measured
+// revolution. No latency, and no following the oscillation. Active only once
+// erps > 3 (a measured period exists); at crawl every read is accepted.
+// "hm" in the telemetry counts the raw changes that were masked. 0 disables.
+// 7 % verified to 75 erps (hc/(6*rev) 1.91 -> 1.001, hb 4089 -> 8, motor
+// smooth). At 161 erps 7 % rounds to 7 cycles against a 6-cycle dither, so
+// 9 % for margin; the short sector at that current is ~13 %.
+#define GOKART_HALL_LOCKOUT_PCT 9
+// Hall edge trace: every raw hall change is logged as state:dwell (PWM cycles
+// of 64 us) in a 16-entry ring; on the first backward step while turning,
+// keep 8 more changes and freeze. The main loop prints "hd s:d s:d ..."
+// (oldest first) and re-arms. Raw-sample traces (31 Oct) showed each bad
+// edge as early flip ~4 samples, back ~3, then final: a fixed ~18 deg
+// electrical window at every speed, i.e. the sensor output itself dithers.
+#define GOKART_HALL_TRACE 1
 // Bench calibration: step the motor angle offset (ui8_s_motor_angle) by
 // GOKART_ANGLE_SWEEP_STEP every ~3 s while running and report it as "ang"
 // in the telemetry line, so the best offset can be read off speed vs angle.

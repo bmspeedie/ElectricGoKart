@@ -34,8 +34,8 @@ ADC_POSITION_MAX = 182
 UART_RX = 0
 HALL_PINS = [6, 7, 15]  # DIO lines wired to the three hall sensor outputs
 BAUD = 9600.0
-UART_SAMPLE_HZ = 100_000.0  # about 10.4 samples per bit
-UART_SAMPLES = 16384  # 164 ms window: covers a full report period (~120 ms) plus LCD3 frames
+UART_SAMPLE_HZ = 100_000.0  # about 10.4 samples per bit (50 kHz was tried and the capture stopped triggering)
+UART_SAMPLES = 16384  # 164 ms window: covers a full ~115-character report (~120 ms) plus LCD3 frames
 
 # Scope volts to controller ADC counts, fitted from matched readings
 # (0.85 V -> 45, 3.65 V -> 174). Used when the controller sends no report.
@@ -65,7 +65,7 @@ state = {
     "mcu": {"last_hc": None, "last_hi": None, "changes": 0, "invalid": 0, "erps": None, "t0": None, "t_last": None},
 }
 lock = threading.Lock()
-history = []  # (time, scope V, adc, duty, erps from MCU, erps from scope, hall, ang, cur) per controller report
+history = []  # (time, scope V, adc, duty, erps from MCU, erps from scope, hall, ang, cur, tmin, tmax, rst, up, ch2, ch2_min, hold, hc, hi, rev, hb, hx, hm) per controller report
 ib_log = []  # (time, duty, erps, [32 phase-B current samples by applied angle])
 
 
@@ -327,8 +327,8 @@ def lcd3_frames(data):
 
 
 REPORT_RE = re.compile(
-    rb"thr (\d{1,3}) dr (\d{1,3}) duty (\d{1,3}) hall (-?\d{1,2})"
-    rb"(?: hc (\d{1,5}) hi (\d{1,5}) erps (\d{1,5}))?(?: ang (\d{1,3}))?(?: cur (-?\d{1,4}))?(?: tmin (\d{1,3}) tmax (\d{1,3}))?(?: rst (\d{1,3}) up (\d{1,3}))?\r?\n"
+    rb"thr (\d{1,3})(?: dr (\d{1,3}))? duty (\d{1,3}) hall (-?\d{1,2})"
+    rb"(?: hc (\d{1,5}) hi (\d{1,5}) erps (\d{1,5}))?(?: ang (\d{1,3}))?(?: cur (-?\d{1,4}))?(?: tmin (\d{1,3}) tmax (\d{1,3}))?(?: rst (\d{1,3}) up (\d{1,3}))?(?: hold (\d{1,5}))?(?: rev (\d{1,5}) hb (\d{1,5}) hx (\d{1,5}))?(?: hm (\d{1,5}))?(?: p6 (\d{1,4}) p4 (\d{1,4}))?\r?\n"
 )
 
 
@@ -337,7 +337,7 @@ def text_reports(data):
     are complete within this capture. The line may be glued directly onto
     LCD3 frame bytes, so match the pattern anywhere rather than splitting."""
     for m in REPORT_RE.finditer(data):
-        thr, dr, duty, hall = (int(g) for g in m.groups()[:4])
+        thr, dr, duty, hall = (int(g) if g is not None else 0 for g in m.groups()[:4])
         if thr <= 255 and dr <= 255 and duty <= 255:
             r = {"thr": thr, "dr": dr, "duty": duty, "hall": hall}
             if m.group(5) is not None:
@@ -352,10 +352,22 @@ def text_reports(data):
                 r["tmin"], r["tmax"] = int(m.group(10)), int(m.group(11))
             if m.group(12) is not None:
                 r["rst"], r["up"] = int(m.group(12)), int(m.group(13))
+            if m.group(14) is not None:
+                r["hold"] = int(m.group(14))
+            if m.group(15) is not None:
+                r["rev"], r["hb"], r["hx"] = int(m.group(15)), int(m.group(16)), int(m.group(17))
+            if m.group(18) is not None:
+                r["hm"] = int(m.group(18))
+            if m.group(19) is not None:
+                r["p6"] = int(m.group(19))
+                r["p4"] = int(m.group(20))
             yield r
 
 
 SHORT_RE = re.compile(rb"thr (\d{1,3}) up (\d{1,3}) rst (\d{1,3})\r?\n")
+HT_RE = re.compile(rb"ht ([0-7]{32})\r?\n")  # raw hall reads around a backward step, one per 64 us, oldest first
+HD_RE = re.compile(rb"hd((?: [0-7]:\d{1,3}){16})\r?\n")  # hall changes as state:dwell (64 us cycles), oldest first
+ht_log = []  # (time, 32-char trace) or (time, [(state, dwell), ...])
 IB_RE = re.compile(rb"ib((?: \d{1,3}){32})\r?\n")
 
 
@@ -376,6 +388,7 @@ def read_uart(hdwf):
     now = time.time()
     with lock:
         state["bytes_at"] = now
+        state["last_raw"] = bytes(data[-400:])  # for /raw, debugging the link
     for frame in lcd3_frames(data):
         with lock:
             state["frame_at"] = now
@@ -385,6 +398,16 @@ def read_uart(hdwf):
             state["uart_at"] = now
             history.append((round(now, 2), round(state["voltage"] or 0, 3), int(m.group(1)), 0, 0, 0.0, state["hall"],
                             None, None, None, None, int(m.group(3)), int(m.group(2))))
+    for m in HT_RE.finditer(data):
+        with lock:
+            ht_log.append((round(now, 2), m.group(1).decode()))
+    for m in HD_RE.finditer(data):
+        pairs = [tuple(int(x) for x in p.split(":")) for p in m.group(1).decode().split()]
+        with lock:
+            ht_log.append((round(now, 2), pairs))
+    with lock:
+        if len(ht_log) > 300:
+            del ht_log[:len(ht_log) - 300]
     for wave in ib_waves(data):
         with lock:
             state["ib_wave"] = wave
@@ -403,6 +426,10 @@ def read_uart(hdwf):
             state["duty"] = parsed.get("duty", state["duty"])
             state["hall"] = parsed.get("hall", state["hall"])
             state["ang"] = parsed.get("ang", state.get("ang"))
+            state["hold"] = parsed.get("hold", state.get("hold"))
+            state["cur"] = parsed.get("cur", state.get("cur"))
+            state["p6"] = parsed.get("p6", state.get("p6"))
+            state["p4"] = parsed.get("p4", state.get("p4"))
             state["uart_at"] = now
             if "hc" in parsed:
                 m = state["mcu"]
@@ -418,7 +445,9 @@ def read_uart(hdwf):
             history.append((round(now, 2), round(state["voltage"] or 0, 3), adc, parsed.get("duty"),
                             parsed.get("erps"), None if scope_erps is None else round(scope_erps, 1), parsed.get("hall"),
                             parsed.get("ang"), parsed.get("cur"), parsed.get("tmin"), parsed.get("tmax"), parsed.get("rst"), parsed.get("up"),
-                            round(state.get("ch2") or 0, 3), round(state.get("ch2_min") or 0, 3)))
+                            round(state.get("ch2") or 0, 3), round(state.get("ch2_min") or 0, 3), parsed.get("hold"),
+                            parsed.get("hc"), parsed.get("hi"), parsed.get("rev"), parsed.get("hb"), parsed.get("hx"), parsed.get("hm"),
+                            parsed.get("p6"), parsed.get("p4")))
             if len(history) > 2000:
                 del history[:len(history) - 2000]
 
@@ -682,7 +711,11 @@ class Handler(BaseHTTPRequestHandler):
                 "adc": snap["adc"] if source == "controller" else None,
                 "dr": snap["dr"] if source == "controller" else None,
                 "duty": snap["duty"] if source == "controller" else None,
+                "cur": snap.get("cur") if source == "controller" else None,
+                "p6": snap.get("p6") if source == "controller" else None,
+                "p4": snap.get("p4") if source == "controller" else None,
                 "hall": snap["hall"] if source == "controller" else None,
+                "hold": snap.get("hold") if source == "controller" else None,
                 "position": position,
                 "position_source": source,
                 "position_max": snap["position_max"],
@@ -704,14 +737,24 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(raw)
             return
-        if self.path.startswith("/history") or self.path.startswith("/ib"):
+        if self.path.startswith("/history") or self.path.startswith("/ib") or self.path.startswith("/ht"):
             with lock:
-                raw = json.dumps(ib_log if self.path.startswith("/ib") else history).encode()
+                raw = json.dumps(ib_log if self.path.startswith("/ib") else ht_log if self.path.startswith("/ht") else history).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
             self.wfile.write(raw)
+            return
+        if self.path.startswith("/raw"):
+            with lock:
+                raw = state.get("last_raw") or b""
+            body = json.dumps({"hex": raw.hex(" "), "text": raw.decode("ascii", errors="replace")}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if self.path.startswith("/reset"):
             with lock:

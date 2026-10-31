@@ -36,6 +36,10 @@ static uint32_t ui32_dutycycle; // local version of setpoint
 #ifdef GOKART_MODE
 uint8_t ui8_gk_thr_min = 0, ui8_gk_thr_max = 0; // raw throttle ADC spread since last telemetry report
 static uint16_t ui16_gk_thr_filt = 0;
+static uint8_t ui8_gk_thr_prev1 = 0, ui8_gk_thr_prev2 = 0; // last two raw samples for the median
+static uint8_t ui8_gk_thr_accepted = 0; // output of the hysteresis deadband
+uint16_t ui16_gk_hold_ticks = 0; // throttle hold test: ticks left on the current held duty (0 = not holding)
+static uint16_t ui16_gk_hold_duty = 0;
 #endif
 
 static int8_t uint_PWM_Enable = 0; //flag for PWM state
@@ -120,18 +124,54 @@ uint16_t aca_setpoint(uint16_t ui16_time_ticks_between_pas_interrupt, uint16_t s
             if (ui8_throttle_raw < ui8_gk_thr_min) ui8_gk_thr_min = ui8_throttle_raw;
             if (ui8_throttle_raw > ui8_gk_thr_max) ui8_gk_thr_max = ui8_throttle_raw;
         }
+        ui8_throttle_adc = ui8_throttle_raw;
+#if GOKART_THROTTLE_MEDIAN3
+        // median of the last three raw samples: a lone spike never reaches the output
+        {
+            uint8_t a = ui8_gk_thr_prev2, b = ui8_gk_thr_prev1, c = ui8_throttle_raw;
+            if ((a <= b && b <= c) || (c <= b && b <= a)) ui8_throttle_adc = b;
+            else if ((b <= a && a <= c) || (c <= a && a <= b)) ui8_throttle_adc = a;
+            else ui8_throttle_adc = c;
+            ui8_gk_thr_prev2 = ui8_gk_thr_prev1;
+            ui8_gk_thr_prev1 = ui8_throttle_raw;
+        }
+#endif
+#if GOKART_THROTTLE_DEADBAND > 0
+        // hysteresis: hold the accepted value until the reading leaves the band, then jump to it
+        {
+            int16_t i16_delta = (int16_t) ui8_throttle_adc - (int16_t) ui8_gk_thr_accepted;
+            if (i16_delta > GOKART_THROTTLE_DEADBAND || i16_delta < -GOKART_THROTTLE_DEADBAND) {
+                ui8_gk_thr_accepted = ui8_throttle_adc;
+            }
+            ui8_throttle_adc = ui8_gk_thr_accepted;
+        }
+#endif
 #if GOKART_THROTTLE_FILTER_SHIFT > 0
         // exponential average of the 50 Hz samples: time constant ~ 2^shift samples
-        if (ui16_gk_thr_filt == 0) ui16_gk_thr_filt = (uint16_t) ui8_throttle_raw << GOKART_THROTTLE_FILTER_SHIFT;
-        ui16_gk_thr_filt += ui8_throttle_raw - (ui16_gk_thr_filt >> GOKART_THROTTLE_FILTER_SHIFT);
+        if (ui16_gk_thr_filt == 0) ui16_gk_thr_filt = (uint16_t) ui8_throttle_adc << GOKART_THROTTLE_FILTER_SHIFT;
+        ui16_gk_thr_filt += ui8_throttle_adc - (ui16_gk_thr_filt >> GOKART_THROTTLE_FILTER_SHIFT);
         ui8_throttle_adc = (uint8_t) (ui16_gk_thr_filt >> GOKART_THROTTLE_FILTER_SHIFT);
-#else
-        ui8_throttle_adc = ui8_throttle_raw;
 #endif
 
         if (!brake_is_set() && hall_sensors > 0 && hall_sensors < 7 && ui8_throttle_adc > i16_throttle_start) {
             ui16_duty = (uint16_t) map(ui8_throttle_adc, i16_throttle_start, ADC_THROTTLE_MAX_VALUE, GOKART_MIN_DUTY, GOKART_MAX_DUTY);
         }
+
+#if GOKART_THROTTLE_HOLD_TICKS > 0
+        // Hunting test: freeze the duty at the value first requested, for
+        // GOKART_THROTTLE_HOLD_TICKS ticks, then re-sample from the throttle.
+        // Any stop condition above (throttle in deadzone, brake, bad halls)
+        // already gave ui16_duty == 0 and ends the hold immediately.
+        if (ui16_duty == 0) {
+            ui16_gk_hold_ticks = 0;
+        } else if (ui16_gk_hold_ticks == 0) {
+            ui16_gk_hold_duty = ui16_duty;
+            ui16_gk_hold_ticks = GOKART_THROTTLE_HOLD_TICKS;
+        } else {
+            ui16_duty = ui16_gk_hold_duty;
+            ui16_gk_hold_ticks--;
+        }
+#endif
 
         ui16_sum_throttle = ui16_duty;
         if (ui16_duty > 0) {

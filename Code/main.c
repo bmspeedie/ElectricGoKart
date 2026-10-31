@@ -53,6 +53,7 @@ uint8_t ui8_slowloop_flag = 0;
 uint8_t ui8_veryslowloop_counter = 0;
 #ifdef GOKART_MODE
 static uint32_t ui32_gk_cur_sum = 0;
+static uint32_t ui32_gk_x4_sum = 0;
 static uint16_t ui16_gk_cur_n = 0;
 static uint8_t ui8_gk_reset_flags = 0;
 #endif
@@ -174,8 +175,10 @@ int main(void) {
 
 		uart_send_if_avail();
 #ifdef GOKART_MODE
-		// average the total (shunt) current between telemetry reports
+		// average both current ADC pins between telemetry reports
+		// p6 is PB6, the shunt amplifier; p4 is PB4, what the watt digits use
 		ui32_gk_cur_sum += ui16_adc_read_motor_total_current();
+		ui32_gk_x4_sum += ui16_adc_read_x4_value();
 		ui16_gk_cur_n++;
 #endif
 
@@ -245,13 +248,34 @@ int main(void) {
 #endif
 				// bench telemetry for the throttle monitor, every ~120 ms,
 				// interleaved with the LCD3 frames (both use blocking TX)
-				// "cur" is the mean shunt-current ADC reading (10-bit) minus the zero-current calibration
+				// "cur" is PB6 minus its boot zero. "p6" and "p4" are the raw 10-bit
+				// averages (0 = 0 V, 1023 = ADC reference, 5 V on this board).
 				{
-					int16_t i16_cur = ui16_gk_cur_n ? (int16_t) (ui32_gk_cur_sum / ui16_gk_cur_n) - (int16_t) ui16_current_cal_b : 0;
+					uint16_t ui16_n = ui16_gk_cur_n;
+					uint16_t ui16_p6 = ui16_n ? (uint16_t) (ui32_gk_cur_sum / ui16_n) : 0;
+					uint16_t ui16_p4 = ui16_n ? (uint16_t) (ui32_gk_x4_sum / ui16_n) : 0;
+					int16_t i16_cur = ui16_n ? (int16_t) ui16_p6 - (int16_t) ui16_current_cal_b : 0;
 					ui32_gk_cur_sum = 0;
+					ui32_gk_x4_sum = 0;
 					ui16_gk_cur_n = 0;
-					printf("thr %u dr %u duty %u hall %d hc %u hi %u erps %u ang %u cur %d tmin %u tmax %u rst %u up %u\r\n", ui8_adc_read_throttle(), *(volatile uint8_t *) 0x5404, ui16_setpoint, (int) hall_sensors, ui16_hall_changes, ui16_hall_invalid, ui16_motor_speed_erps, ui8_s_motor_angle, i16_cur, ui8_gk_thr_min, ui8_gk_thr_max, ui8_gk_reset_flags, ui8_uptime);
+					// "hold" is the throttle-hold test: slow-loop ticks left before the duty is re-sampled (0 = live throttle)
+					// "rev" electrical revolutions, "hb" backward hall steps, "hx" non-neighbour hall jumps (all wrap at 65536)
+					// (printf blocks for the whole line at 9600 baud, ~1 ms per character, so keep it short)
+					printf("thr %u duty %u hall %d hc %u hi %u erps %u cur %d tmin %u tmax %u rst %u up %u hold %u rev %u hb %u hx %u hm %u p6 %u p4 %u\r\n", ui8_adc_read_throttle(), ui16_setpoint, (int) hall_sensors, ui16_hall_changes, ui16_hall_invalid, ui16_motor_speed_erps, i16_cur, ui8_gk_thr_min, ui8_gk_thr_max, ui8_gk_reset_flags, ui8_uptime, ui16_gk_hold_ticks, ui16_hall_erevs, ui16_hall_back, ui16_hall_seq_err, ui16_hall_masked, ui16_p6, ui16_p4);
 					ui8_gk_thr_min = ui8_gk_thr_max = 0;
+#if GOKART_HALL_TRACE
+					// hall changes as state:dwell (PWM cycles of 64 us), oldest first; the backward step is 8 entries before the end
+					if (ui8_hall_trace_frozen) {
+						uint8_t ui8_t;
+						printf("hd");
+						for (ui8_t = 0; ui8_t < 16; ui8_t++) {
+							uint8_t ui8_i = (ui8_hall_trace_pos + ui8_t) & 15;
+							printf(" %u:%u", ui8_hall_trace_state[ui8_i], ui8_hall_trace_dwell[ui8_i]);
+						}
+						printf("\r\n");
+						ui8_hall_trace_frozen = 0; // re-arm
+					}
+#endif
 				}
 #endif
 
