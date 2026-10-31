@@ -71,7 +71,7 @@ state = {
     "mcu": {"last_hc": None, "last_hi": None, "changes": 0, "invalid": 0, "erps": None, "t0": None, "t_last": None},
 }
 lock = threading.Lock()
-history = []  # (time, scope V, adc, duty, erps from MCU, erps from scope, hall, ang, cur, tmin, tmax, rst, up, ch2, ch2_min, hold, hc, hi, rev, hb, hx, hm, p6, p4, pc) per controller report
+history = []  # (time, scope V, adc, duty, erps from MCU, erps from scope, hall, ang, cur, tmin, tmax, rst, up, ch2, ch2_min, hold, hc, hi, rev, hb, hx, hm, p6, p4, pc, bv) per controller report
 ib_log = []  # (time, duty, erps, [32 phase-B current samples by applied angle])
 
 
@@ -336,7 +336,7 @@ def lcd3_frames(data):
 
 REPORT_RE = re.compile(
     rb"thr (\d{1,3})(?: dr (\d{1,3}))? duty (\d{1,3}) hall (-?\d{1,2})"
-    rb"(?: hc (\d{1,5}) hi (\d{1,5}) erps (\d{1,5}))?(?: ang (\d{1,3}))?(?: cur (-?\d{1,4}))?(?: tmin (\d{1,3}) tmax (\d{1,3}))?(?: rst (\d{1,3}) up (\d{1,3}))?(?: hold (\d{1,5}))?(?: rev (\d{1,5}) hb (\d{1,5}) hx (\d{1,5}))?(?: hm (\d{1,5}))?(?: p6 (\d{1,4}) p4 (\d{1,4}))?(?: pc (\d{1,3}))?(?: bv (\d{1,4}))?(?: wz (\d{1,3}))?\r?\n"
+    rb"(?: hc (\d{1,5}) hi (\d{1,5}) erps (\d{1,5}))?(?: ang (\d{1,3}))?(?: cur (-?\d{1,4}))?(?: tmin (\d{1,3}) tmax (\d{1,3}))?(?: rst (\d{1,3}) up (\d{1,3}))?(?: hold (\d{1,5}))?(?: rev (\d{1,5}) hb (\d{1,5}) hx (\d{1,5}))?(?: hm (\d{1,5}))?(?: p6 (\d{1,4}))?(?: p4 (\d{1,4}))?(?: pc (\d{1,3}))?(?: bv (\d{1,4}))?(?: wz (\d{1,3}))?\r?\n"
 )
 
 
@@ -368,6 +368,7 @@ def text_reports(data):
                 r["hm"] = int(m.group(18))
             if m.group(19) is not None:
                 r["p6"] = int(m.group(19))
+            if m.group(20) is not None:
                 r["p4"] = int(m.group(20))
             if m.group(21) is not None:
                 r["pc"] = int(m.group(21))
@@ -464,7 +465,7 @@ def read_uart(hdwf):
                             parsed.get("ang"), parsed.get("cur"), parsed.get("tmin"), parsed.get("tmax"), parsed.get("rst"), parsed.get("up"),
                             round(state.get("ch2") or 0, 3), round(state.get("ch2_min") or 0, 3), parsed.get("hold"),
                             parsed.get("hc"), parsed.get("hi"), parsed.get("rev"), parsed.get("hb"), parsed.get("hx"), parsed.get("hm"),
-                            parsed.get("p6"), parsed.get("p4"), parsed.get("pc")))
+                            parsed.get("p6"), parsed.get("p4"), parsed.get("pc"), parsed.get("bv")))
             if len(history) > 2000:
                 del history[:len(history) - 2000]
 

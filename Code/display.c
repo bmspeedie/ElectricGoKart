@@ -128,15 +128,57 @@ static uint16_t wheel_circumference_mm(void) {
  * 1 + 10k/5.1k), sampled by the PWM update interrupt. A 7 count rise on
  * that pin is about 4.6 A. Voltage is PB5, the only pack-voltage ADC, in
  * tenths of a volt. */
+/* PB6 is one sample per PWM cycle of a chopped phase current, so a single
+ * reading swings by tens of counts at steady throttle and the watt digits
+ * jumped around. Accumulate it every main-loop pass (display_update), take
+ * the mean over the 40 ms between frames, then run that through a first
+ * order filter with a 4 frame (160 ms) time constant, kept in 1/16 counts
+ * since one whole count is ~40 W at 60 V. The frame mean alone still let
+ * the digits wander a step or two. */
+static uint32_t ui32_power_adc_sum = 0;
+static uint16_t ui16_power_adc_n = 0;
+static uint16_t ui16_power_adc_filt = 0; // 1/16 counts, above the idle zero
+static uint16_t ui16_power_adc_zero = 0; // 1/16 counts, PB6 with the motor off
+static uint8_t ui8_power_filt_primed = 0;
+
 static uint8_t motor_power_steps(void) {
-	uint16_t adc = ui16_adc_read_motor_total_current();
+	uint16_t adc16; // 1/16 counts
 	uint16_t dv;
 	uint32_t ma, watts, steps;
-	if (adc <= ui16_current_cal_b + LCD3_CURRENT_DEADBAND) {
+	if (ui16_power_adc_n == 0) {
+		adc16 = ui16_adc_read_motor_total_current() << 4;
+	} else {
+		adc16 = (uint16_t) ((ui32_power_adc_sum << 4) / ui16_power_adc_n);
+	}
+	ui32_power_adc_sum = 0;
+	ui16_power_adc_n = 0;
+	if (!ui8_power_filt_primed) {
+		ui16_power_adc_zero = ui16_current_cal_b << 4;
+		ui16_power_adc_filt = 0;
+		ui8_power_filt_primed = 1;
+	}
+	// The boot zero (ui16_current_cal_b) is taken before the bridge runs; with
+	// PWM on and the motor stopped PB6 sits ~2 counts higher, which showed as
+	// ~100 W at idle. Track the zero whenever the duty is off (~1.3 s time
+	// constant) and measure from that instead.
+	if (ui16_setpoint == 0) {
+		if (adc16 >= ui16_power_adc_zero) {
+			ui16_power_adc_zero += (adc16 - ui16_power_adc_zero) >> 5;
+		} else {
+			ui16_power_adc_zero -= (ui16_power_adc_zero - adc16) >> 5;
+		}
+	}
+	adc16 = adc16 > ui16_power_adc_zero ? adc16 - ui16_power_adc_zero : 0;
+	if (adc16 >= ui16_power_adc_filt) {
+		ui16_power_adc_filt += (adc16 - ui16_power_adc_filt) >> 2;
+	} else {
+		ui16_power_adc_filt -= (ui16_power_adc_filt - adc16) >> 2;
+	}
+	if (ui16_power_adc_filt <= (LCD3_CURRENT_DEADBAND << 4)) {
 		return 0;
 	}
-	// mA per count = (5 V / 1024) / (0.0025 ohm * 15100/5100) = 660
-	ma = (uint32_t) (adc - ui16_current_cal_b) * 660;
+	// mA per count = (5 V / 1024) / (0.0025 ohm * 15100/5100) = 660, so 660/16 per 1/16 count
+	ma = ((uint32_t) ui16_power_adc_filt * 660) >> 4;
 	dv = battery_decivolts();
 	watts = ma * dv / 10000;
 	steps = (watts * 40 + (LCD3_SUPPLY_DV / 2)) / LCD3_SUPPLY_DV;
@@ -252,6 +294,14 @@ void digestLcdValues(void) {
 void display_update() {
 
 	//printf("display_update\r\n");
+
+	// current sample for the watt digits, see motor_power_steps(). The main
+	// loop runs well under 65535 passes per 40 ms frame, and 65535 * 1023
+	// fits the 32 bit sum.
+	if (ui16_power_adc_n < 65535) {
+		ui32_power_adc_sum += ui16_adc_read_motor_total_current();
+		ui16_power_adc_n++;
+	}
 
 	// fill local buffer from uart ringbuffer
 	uart_fill_rx_packet_buffer(ui8_rx_buffer, 13, &ui8_UARTCounter);

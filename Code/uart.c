@@ -40,6 +40,15 @@ void uart_put_buffered(uint8_t c) {
     UART2_ITConfig(UART2_IT_TXE, ENABLE);
 }
 
+// Bytes queued and not yet handed to the UART. Callers that produce long
+// bursts (the telemetry line) check this first so a burst never arrives at
+// a nearly full queue: bytes dropped mid-line come out as a sparse scatter
+// of characters (one per byte time as slots free up), which looks like
+// garbage on the wire.
+uint8_t uart_tx_pending(void) {
+    return (uint8_t) (ui8_tx_fillpointer - ui8_tx_digestpointer);
+}
+
 void UART2_TX_IRQHandler(void) __interrupt(UART2_TX_IRQHANDLER) {
     if (ui8_tx_fillpointer != ui8_tx_digestpointer) {
         UART2_SendData8(ui8_uatx_buffer[ui8_tx_digestpointer++]); // pointer wraps at 256
