@@ -34,8 +34,14 @@ ADC_POSITION_MAX = 182
 UART_RX = 0
 HALL_PINS = [6, 7, 15]  # DIO lines wired to the three hall sensor outputs
 BAUD = 9600.0
-UART_SAMPLE_HZ = 100_000.0  # about 10.4 samples per bit (50 kHz was tried and the capture stopped triggering)
-UART_SAMPLES = 16384  # 164 ms window: covers a full ~115-character report (~120 ms) plus LCD3 frames
+# 40 kHz = 4.2 samples per bit, enough for the majority-vote decoder, and the
+# 16384-sample buffer then spans 410 ms: the controller reports every ~240 ms
+# with a ~135 ms line, so nearly every capture holds one complete report.
+# (An earlier 50 kHz attempt "stopped triggering" because capture_uart()'s
+# timeout was shorter than the capture window; the timeout now follows it.)
+UART_SAMPLE_HZ = 40_000.0
+UART_SAMPLES = 16384
+UART_WINDOW_S = UART_SAMPLES / UART_SAMPLE_HZ
 
 # Scope volts to controller ADC counts, fitted from matched readings
 # (0.85 V -> 45, 3.65 V -> 174). Used when the controller sends no report.
@@ -198,8 +204,10 @@ def decode_uart(bits, samples_per_bit):
     return bytes(out)
 
 
-def capture_uart(hdwf, timeout=0.3):
+def capture_uart(hdwf, timeout=None):
     """Arm one capture and return decoded bytes, or b'' if nothing arrived."""
+    if timeout is None:
+        timeout = UART_WINDOW_S + 0.3  # the window itself plus time to wait for a trigger
     check(dwf.FDwfDigitalInConfigure(hdwf, c_int(1), c_int(1)), "uart capture arm")
     sts = c_byte()
     deadline = time.perf_counter() + timeout

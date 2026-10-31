@@ -81,11 +81,11 @@
 // 1. Median of the last 3 samples: removes any single-sample outlier, costs at
 //    most one 20 ms tick of delay on a real step. 0 disables.
 #define GOKART_THROTTLE_MEDIAN3 1
-// 2. Hysteresis deadband: the accepted value only moves when the median is
-//    more than this many ADC counts away from it, then jumps straight to the
-//    new value. Kills +/-1..2 count dither with no delay on real moves.
-//    ~1.65 ADC counts per duty step, so 2 counts is ~1 duty step. 0 disables.
-#define GOKART_THROTTLE_DEADBAND 2
+// 2. Backlash deadband: the accepted value trails the median by up to this
+//    many counts and only moves when the median pulls it, so +/-1 count
+//    dither is ignored and a real move is followed at full resolution
+//    (~1.8 duty steps per ADC count with MAX_DUTY 255). 0 disables.
+#define GOKART_THROTTLE_DEADBAND 1
 // 3. Exponential average over ~2^N samples (2 -> ~80 ms). Off: it slows the
 //    response and only attenuates spikes rather than rejecting them.
 #define GOKART_THROTTLE_FILTER_SHIFT 0

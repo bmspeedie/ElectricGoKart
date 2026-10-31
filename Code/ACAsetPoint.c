@@ -137,12 +137,20 @@ uint16_t aca_setpoint(uint16_t ui16_time_ticks_between_pas_interrupt, uint16_t s
         }
 #endif
 #if GOKART_THROTTLE_DEADBAND > 0
-        // hysteresis: hold the accepted value until the reading leaves the band, then jump to it
+        // backlash: the accepted value is dragged along at DEADBAND counts behind the
+        // reading, so it ignores dither inside the band but follows a real move with
+        // full 1-count resolution (snapping to the new value instead gave steps of
+        // DEADBAND+1 counts, ~2 % of travel each)
         {
             int16_t i16_delta = (int16_t) ui8_throttle_adc - (int16_t) ui8_gk_thr_accepted;
-            if (i16_delta > GOKART_THROTTLE_DEADBAND || i16_delta < -GOKART_THROTTLE_DEADBAND) {
-                ui8_gk_thr_accepted = ui8_throttle_adc;
+            if (i16_delta > GOKART_THROTTLE_DEADBAND) {
+                ui8_gk_thr_accepted = ui8_throttle_adc - GOKART_THROTTLE_DEADBAND;
+            } else if (i16_delta < -GOKART_THROTTLE_DEADBAND) {
+                ui8_gk_thr_accepted = ui8_throttle_adc + GOKART_THROTTLE_DEADBAND;
             }
+            // let the ends of travel be reached despite the lag
+            if (ui8_throttle_adc >= ADC_THROTTLE_MAX_VALUE) ui8_gk_thr_accepted = ui8_throttle_adc;
+            if (ui8_throttle_adc <= i16_throttle_start) ui8_gk_thr_accepted = ui8_throttle_adc;
             ui8_throttle_adc = ui8_gk_thr_accepted;
         }
 #endif

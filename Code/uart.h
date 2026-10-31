@@ -11,7 +11,10 @@
 
 #include <stdint.h>
 
-#define UART_RINGBUFFER_SIZE 128
+#define UART_RINGBUFFER_SIZE 128 // rx
+// tx: 256 so the uint8_t pointers wrap by themselves; must hold a telemetry
+// line (~125) + a hall trace line (~90) + an LCD3 frame (12) at once
+#define UART_TX_RINGBUFFER_SIZE 256
 #define UART_EMPTY_INDICATOR 255
 #define UART_PACKET_TIMEOUT_TICKS 312 // 20000 uS / 64 uS
 
@@ -19,7 +22,7 @@ uint8_t uart_get_packet_start_pos(void);
 uint8_t byte_avail_at_position(void);
 uint8_t uart_get_buffered(void);
 void uart_put_buffered(uint8_t c);
-void uart_send_if_avail();
+void uart_send_if_avail(); // kicks the TX interrupt if anything is queued (safety net)
 void uart_fill_rx_packet_buffer(uint8_t *buffer, uint8_t bufferSize, uint8_t *bufferPos);
 
 void uart_init (void);

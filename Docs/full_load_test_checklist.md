@@ -23,7 +23,7 @@ correction inert).
 
 ## Telemetry fields
 
-One line every ~120 ms:
+One line every ~240 ms (TX is queued and interrupt driven; it never stalls the control loop):
 `thr duty hall hc hi erps cur tmin tmax rst up rev hb hx hm p6 p4 pc`
 
 | field | meaning | healthy |

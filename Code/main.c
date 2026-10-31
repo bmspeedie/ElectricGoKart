@@ -103,6 +103,7 @@ void TIM2_UPD_OVF_TRG_BRK_IRQHandler(void) __interrupt(TIM2_UPD_OVF_TRG_BRK_IRQH
 
 // UART2 receivce handler
 void UART2_IRQHandler(void) __interrupt(UART2_IRQHANDLER);
+void UART2_TX_IRQHandler(void) __interrupt(UART2_TX_IRQHANDLER);
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////
@@ -246,11 +247,14 @@ int main(void) {
 					}
 				}
 #endif
-				// bench telemetry for the throttle monitor, every ~120 ms,
-				// interleaved with the LCD3 frames (both use blocking TX)
+				// bench telemetry for the throttle monitor, every other very-slow loop (~240 ms).
+				// TX is queued (uart_put_buffered, drained by the UART TX interrupt) so this no
+				// longer stalls the 50 Hz slow loop, but 9600 baud only carries ~960 chars/s and
+				// the LCD3 frames share the line, so keep the rate and the line length down.
 				// "cur" is PB6 minus its boot zero. "p6" and "p4" are the raw 10-bit
 				// averages (0 = 0 V, 1023 = ADC reference, 5 V on this board).
-				{
+				static uint8_t ui8_gk_tele_div = 0;
+				if (++ui8_gk_tele_div & 1) {
 					uint16_t ui16_n = ui16_gk_cur_n;
 					uint32_t ui32_gk_cur_sum_copy = ui32_gk_cur_sum;
 					uint16_t ui16_p6 = ui16_n ? (uint16_t) (ui32_gk_cur_sum / ui16_n) : 0;
@@ -261,7 +265,7 @@ int main(void) {
 					ui16_gk_cur_n = 0;
 					// "hold" is the throttle-hold test: slow-loop ticks left before the duty is re-sampled (0 = live throttle)
 					// "rev" electrical revolutions, "hb" backward hall steps, "hx" non-neighbour hall jumps (all wrap at 65536)
-					// (printf blocks for the whole line at 9600 baud, ~1 ms per character, so keep it short)
+					// (a line that does not fit in the 256-byte TX queue is truncated, never blocks)
 #if GOKART_ANGLE_SWEEP
 					// sweep build: report the angle offset under test instead of p6/p4 (line must stay < ~130 chars),
 					// and "cur" in 1/16 ADC counts (the window average has sub-count resolution) so the current
