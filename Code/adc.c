@@ -93,7 +93,6 @@ inline void adc_trigger(void) //inline ?!
     ADC1->CSR &= 0x0F;
     ADC1_StartConversion();
 }
-
 uint8_t ui8_adc_read_phase_B_current(void) {
     //  /* Read LSB first */
     //  templ = *(uint8_t*)(uint16_t)((uint16_t)ADC1_BaseAddress + (uint8_t)(Buffer << 1) + 1);

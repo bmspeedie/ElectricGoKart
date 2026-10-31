@@ -151,7 +151,7 @@
 #define GOKART_ANGLE_SWEEP_STEP 4
 #define GOKART_ANGLE_SWEEP_START 170
 #define GOKART_ANGLE_SWEEP_END 214 // inclusive, then wraps to START
-#define LCD3_DEFAULT_WHEEL_INCH 26  // wheel size assumed for the speed digits until the LCD3 reports its own setting
+#define LCD3_DEFAULT_WHEEL_INCH 26  // wheel size the speed digits assume; set the LCD3's wheel menu to this
 #define LCD3_CURRENT_DEADBAND 1  // PB6 counts above the boot zero before the watts field leaves 0
 // The LCD multiplies the current byte by the voltage on its own supply wires,
 // in tenths of a volt (the VOL page). That feed is the bench supply, not the

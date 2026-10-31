@@ -109,37 +109,38 @@ void display_init(){
 
 static void send_message(void);
 
-/* Wheel circumference in mm for the wheel size code the LCD3 sends us
- * (see LCD3_to_S12SN-1.txt). 25.4 * pi = 79.8 mm per inch of diameter. */
+/* Wheel circumference in mm the LCD3 is assumed to use when it turns the
+ * wheel period into km/h. 25.4 * pi = 79.8 mm per inch of diameter.
+ *
+ * The LCD does report its wheel size (LCD3_to_S12SN-1.txt), but decoding
+ * that code with the table from the protocol notes made a 26" display read
+ * as about 14": at 29 % throttle the glass showed 65. So the size is fixed
+ * here and the display's wheel menu has to be set to LCD3_DEFAULT_WHEEL_INCH.
+ * The raw code goes out as "wz" in the bench telemetry. */
 static uint16_t wheel_circumference_mm(void) {
-	uint8_t inches;
-	switch (lcd_configuration_variables.ui8_wheel_size) {
-		case 0x0e: inches = 10; break;
-		case 0x02: inches = 12; break;
-		case 0x06: inches = 14; break;
-		case 0x00: inches = 16; break;
-		case 0x04: inches = 18; break;
-		case 0x08: inches = 20; break;
-		case 0x0c: inches = 22; break;
-		case 0x10: inches = 24; break;
-		case 0x14: inches = 26; break;
-		case 0x18: inches = 28; break; // 700c
-		default:   inches = LCD3_DEFAULT_WHEEL_INCH; break;
-	}
-	return (uint16_t) (((uint16_t) inches * 798 + 5) / 10);
+	return (uint16_t) (((uint16_t) LCD3_DEFAULT_WHEEL_INCH * 798 + 5) / 10);
 }
 
-/* Battery current in 0.25 A steps for B8, clamped to 0..255. */
-static uint8_t battery_current_quarter_amps(void) {
-	uint16_t adc = ui16_adc_read_x4_value();
-	uint32_t qa;
-	// a few counts of noise around the boot offset would otherwise show as watts at idle
-	if (adc <= ui16_x4_cal_b + LCD3_CURRENT_DEADBAND) {
+/* B8, clamped to 0..255. The LCD shows (B8 / 4) * (LCD3_SUPPLY_DV / 10) watts,
+ * so the byte is pack watts scaled by 40 / LCD3_SUPPLY_DV.
+ *
+ * Current is PB6, the shunt amplifier (four 0.01 ohm in parallel, gain
+ * 1 + 10k/5.1k), sampled by the PWM update interrupt. A 7 count rise on
+ * that pin is about 4.6 A. Voltage is PB5, the only pack-voltage ADC, in
+ * tenths of a volt. */
+static uint8_t motor_power_steps(void) {
+	uint16_t adc = ui16_adc_read_motor_total_current();
+	uint16_t dv;
+	uint32_t ma, watts, steps;
+	if (adc <= ui16_current_cal_b + LCD3_CURRENT_DEADBAND) {
 		return 0;
 	}
-	// amps = counts * 10 / current_cal_a, quarter amps = counts * 40 / cal_a
-	qa = ((uint32_t) (adc - ui16_x4_cal_b) * 40 + (ui8_current_cal_a >> 1)) / ui8_current_cal_a;
-	return qa > 255 ? 255 : (uint8_t) qa;
+	// mA per count = (5 V / 1024) / (0.0025 ohm * 15100/5100) = 660
+	ma = (uint32_t) (adc - ui16_current_cal_b) * 660;
+	dv = battery_decivolts();
+	watts = ma * dv / 10000;
+	steps = (watts * 40 + (LCD3_SUPPLY_DV / 2)) / LCD3_SUPPLY_DV;
+	return steps > 255 ? 255 : (uint8_t) steps;
 }
 
 static void send_message(void) {
@@ -154,13 +155,14 @@ static void send_message(void) {
 	//if (pas_is_set ()) { ui8_moving_indication |= (1 << 4); }
 
 
-	// Throttle position, 0..100 over the calibrated ADC range, read raw
-	// so there is no filtering on the controller side.
-	ui8_throttle_percent = (uint8_t) map(ui8_adc_read_throttle(), ADC_THROTTLE_MIN_VALUE, ADC_THROTTLE_MAX_VALUE, 0, 100);
+	// Throttle position, 0..100 over the usable travel: 0 where the motor
+	// starts (rest value plus deadzone, the same zero the bench monitor
+	// uses), 100 at the calibrated maximum. Read raw, no filtering here.
+	ui8_throttle_percent = (uint8_t) map(ui8_adc_read_throttle(), ADC_THROTTLE_MIN_VALUE + GOKART_THROTTLE_DEADZONE, ADC_THROTTLE_MAX_VALUE, 0, 100);
 
 	// Show throttle percent in the speed digits. The LCD turns the wheel
-	// period into km/h with the wheel size set in its own menu, so use the
-	// size it reports back to us: period_ms = circumference_mm * 3.6 / kmh.
+	// period into km/h with the wheel size set in its own menu, which must
+	// match LCD3_DEFAULT_WHEEL_INCH: period_ms = circumference_mm * 3.6 / kmh.
 	if (ui8_throttle_percent == 0) {
 		ui16_wheel_period_ms = 4500; // reads as 0
 	} else {
@@ -192,11 +194,9 @@ static void send_message(void) {
 	// B7: moving mode indication, bit
 	// throttle: 2
 	ui8_tx_buffer [7] = ui8_moving_indication;
-	// B8: battery current in 0.25 A units; the LCD multiplies by its own
-	// voltage reading to show watts. Taken from the low-pass filtered
-	// current channel against the zero offset measured at boot, with
-	// current_cal_a counts per 10 A as elsewhere in the firmware.
-	ui8_tx_buffer [8] = battery_current_quarter_amps();
+	// B8: pack power, pre-scaled so the LCD's multiply by its own supply
+	// comes out as PB6 current times the PB5 pack voltage.
+	ui8_tx_buffer [8] = motor_power_steps();
 
 	// B9: motor temperature, degrees = B9 + 15
 	ui8_tx_buffer [9] = i8_motor_temperature - 15;

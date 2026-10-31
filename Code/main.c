@@ -177,7 +177,8 @@ int main(void) {
 		uart_send_if_avail();
 #ifdef GOKART_MODE
 		// average both current ADC pins between telemetry reports
-		// p6 is PB6, the shunt amplifier; p4 is PB4, what the watt digits use
+		// p6 is PB6, the shunt amplifier (the sample from the PWM update
+		// interrupt; ~7 counts at 4.6 A). p4 is PB4, not on the shunt.
 		ui32_gk_cur_sum += ui16_adc_read_motor_total_current();
 		ui32_gk_x4_sum += ui16_adc_read_x4_value();
 		ui16_gk_cur_n++;
@@ -248,9 +249,9 @@ int main(void) {
 				}
 #endif
 				// bench telemetry for the throttle monitor, every other very-slow loop (~240 ms).
-				// TX is queued (uart_put_buffered, drained by the UART TX interrupt) so this no
-				// longer stalls the 50 Hz slow loop, but 9600 baud only carries ~960 chars/s and
-				// the LCD3 frames share the line, so keep the rate and the line length down.
+				// TX is queued (uart_put_buffered, drained by the UART TX interrupt) so this no longer
+				// stalls the 50 Hz slow loop, but 9600 baud only carries ~960 chars/s and the
+				// LCD3 frames share the line, so keep the rate and the line length down.
 				// "cur" is PB6 minus its boot zero. "p6" and "p4" are the raw 10-bit
 				// averages (0 = 0 V, 1023 = ADC reference, 5 V on this board).
 				static uint8_t ui8_gk_tele_div = 0;
@@ -279,7 +280,10 @@ int main(void) {
 					printf("thr %u duty %u hall %d hc %u hi %u erps %u cur %d tmin %u tmax %u rst %u up %u hold %u rev %u hb %u hx %u hm %u p6 %u p4 %u\r\n", ui8_adc_read_throttle(), ui16_setpoint, (int) hall_sensors, ui16_hall_changes, ui16_hall_invalid, ui16_motor_speed_erps, i16_cur, ui8_gk_thr_min, ui8_gk_thr_max, ui8_gk_reset_flags, ui8_uptime, ui16_gk_hold_ticks, ui16_hall_erevs, ui16_hall_back, ui16_hall_seq_err, ui16_hall_masked, ui16_p6, ui16_p4);
 #else
 					// "pc" is the FOC angle correction (127 = neutral, 360/256 deg per count)
-					printf("thr %u duty %u hall %d hc %u hi %u erps %u cur %d tmin %u tmax %u rst %u up %u rev %u hb %u hx %u hm %u p6 %u p4 %u pc %u\r\n", ui8_adc_read_throttle(), ui16_setpoint, (int) hall_sensors, ui16_hall_changes, ui16_hall_invalid, ui16_motor_speed_erps, i16_cur, ui8_gk_thr_min, ui8_gk_thr_max, ui8_gk_reset_flags, ui8_uptime, ui16_hall_erevs, ui16_hall_back, ui16_hall_seq_err, ui16_hall_masked, ui16_p6, ui16_p4, ui8_position_correction_value);
+					// "bv" is the raw PB5 pack-voltage reading (10 bit). "wz" is the wheel
+					// size code the LCD3 sent (255 = none yet); the speed digits assume
+					// LCD3_DEFAULT_WHEEL_INCH regardless, so the LCD must be set to that size.
+					printf("thr %u duty %u hall %d hc %u hi %u erps %u cur %d tmin %u tmax %u rst %u up %u rev %u hb %u hx %u hm %u p6 %u p4 %u pc %u bv %u wz %u\r\n", ui8_adc_read_throttle(), ui16_setpoint, (int) hall_sensors, ui16_hall_changes, ui16_hall_invalid, ui16_motor_speed_erps, i16_cur, ui8_gk_thr_min, ui8_gk_thr_max, ui8_gk_reset_flags, ui8_uptime, ui16_hall_erevs, ui16_hall_back, ui16_hall_seq_err, ui16_hall_masked, ui16_p6, ui16_p4, ui8_position_correction_value, ui16_adc_read_battery_voltage(), lcd_configuration_variables.ui8_wheel_size);
 #endif
 #endif
 					ui8_gk_thr_min = ui8_gk_thr_max = 0;
