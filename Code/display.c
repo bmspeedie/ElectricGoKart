@@ -66,6 +66,10 @@ static const uint16_t ui16_battery_min_dv[BATTERY_LEVELS] = {
 static uint8_t ui8_battery_level = 0;
 static uint16_t ui16_battery_adc_acc = 0;
 static uint8_t ui8_send_tick = 0;
+#if LCD3_SYMBOL_TEST
+static uint8_t ui8_symbol_tick = 0;
+static uint8_t ui8_symbol_phase = 0;
+#endif
 
 /* Pack voltage in tenths of a volt from the filtered 10 bit ADC reading,
  * using the same calibration constant the rest of the firmware uses. */
@@ -109,16 +113,12 @@ void display_init(){
 
 static void send_message(void);
 
-/* Wheel circumference in mm the LCD3 is assumed to use when it turns the
- * wheel period into km/h. 25.4 * pi = 79.8 mm per inch of diameter.
- *
- * The LCD does report its wheel size (LCD3_to_S12SN-1.txt), but decoding
- * that code with the table from the protocol notes made a 26" display read
- * as about 14": at 29 % throttle the glass showed 65. So the size is fixed
- * here and the display's wheel menu has to be set to LCD3_DEFAULT_WHEEL_INCH.
- * The raw code goes out as "wz" in the bench telemetry. */
+/* Wheel circumference in mm the LCD3 uses when it turns the wheel period
+ * into km/h. The LCD does report a wheel size code (LCD3_to_S12SN-1.txt,
+ * this unit sends 0), but neither the table in the notes nor a plain
+ * 26" x 79.8 mm matched the glass; the value in config.h was measured. */
 static uint16_t wheel_circumference_mm(void) {
-	return (uint16_t) (((uint16_t) LCD3_DEFAULT_WHEEL_INCH * 798 + 5) / 10);
+	return LCD3_WHEEL_CIRC_MM;
 }
 
 /* B8, clamped to 0..255. The LCD shows (B8 / 4) * (LCD3_SUPPLY_DV / 10) watts,
@@ -137,12 +137,13 @@ static uint16_t wheel_circumference_mm(void) {
  * the digits wander a step or two. */
 static uint32_t ui32_power_adc_sum = 0;
 static uint16_t ui16_power_adc_n = 0;
-static uint16_t ui16_power_adc_filt = 0; // 1/16 counts, above the idle zero
+static int16_t i16_power_adc_filt = 0; // 1/16 counts, signed, relative to the idle zero
 static uint16_t ui16_power_adc_zero = 0; // 1/16 counts, PB6 with the motor off
 static uint8_t ui8_power_filt_primed = 0;
 
 static uint8_t motor_power_steps(void) {
 	uint16_t adc16; // 1/16 counts
+	int16_t delta;
 	uint16_t dv;
 	uint32_t ma, watts, steps;
 	if (ui16_power_adc_n == 0) {
@@ -154,31 +155,31 @@ static uint8_t motor_power_steps(void) {
 	ui16_power_adc_n = 0;
 	if (!ui8_power_filt_primed) {
 		ui16_power_adc_zero = ui16_current_cal_b << 4;
-		ui16_power_adc_filt = 0;
+		i16_power_adc_filt = 0;
 		ui8_power_filt_primed = 1;
 	}
 	// The boot zero (ui16_current_cal_b) is taken before the bridge runs; with
 	// PWM on and the motor stopped PB6 sits ~2 counts higher, which showed as
 	// ~100 W at idle. Track the zero whenever the duty is off (~1.3 s time
 	// constant) and measure from that instead.
-	if (ui16_setpoint == 0) {
+	// Only track while within 3 counts (~2 A) of the current zero, so real
+	// current in either direction is not absorbed into it.
+	if (ui16_setpoint == 0 && adc16 + 48 >= ui16_power_adc_zero && adc16 <= ui16_power_adc_zero + 48) {
 		if (adc16 >= ui16_power_adc_zero) {
 			ui16_power_adc_zero += (adc16 - ui16_power_adc_zero) >> 5;
 		} else {
 			ui16_power_adc_zero -= (ui16_power_adc_zero - adc16) >> 5;
 		}
 	}
-	adc16 = adc16 > ui16_power_adc_zero ? adc16 - ui16_power_adc_zero : 0;
-	if (adc16 >= ui16_power_adc_filt) {
-		ui16_power_adc_filt += (adc16 - ui16_power_adc_filt) >> 2;
-	} else {
-		ui16_power_adc_filt -= (ui16_power_adc_filt - adc16) >> 2;
-	}
-	if (ui16_power_adc_filt <= (LCD3_CURRENT_DEADBAND << 4)) {
+	// Signed: positive is current out of the pack into the motor, negative is
+	// current back into the pack. Only the positive side is shown as watts.
+	delta = (int16_t) (adc16 - ui16_power_adc_zero);
+	i16_power_adc_filt += (delta - i16_power_adc_filt) >> 2;
+	if (i16_power_adc_filt <= (int16_t) (LCD3_CURRENT_DEADBAND << 4)) {
 		return 0;
 	}
 	// mA per count = (5 V / 1024) / (0.0025 ohm * 15100/5100) = 660, so 660/16 per 1/16 count
-	ma = ((uint32_t) ui16_power_adc_filt * 660) >> 4;
+	ma = ((uint32_t) i16_power_adc_filt * 660) >> 4;
 	dv = battery_decivolts();
 	watts = ma * dv / 10000;
 	steps = (watts * 40 + (LCD3_SUPPLY_DV / 2)) / LCD3_SUPPLY_DV;
@@ -186,25 +187,46 @@ static uint8_t motor_power_steps(void) {
 }
 
 static void send_message(void) {
+	uint8_t ui8_power_steps = motor_power_steps(); // B8
+	uint8_t ui8_pedal_adc = ui8_adc_read_throttle(); // raw, no filtering here
 
 	// prepare moving indication info
+#if LCD3_SYMBOL_TEST
+	// one symbol at a time, 5 s each: assist, cruise "C", cruise + flashing
+	// assist (bit 5), arrows circle (bit 0)
+	switch (ui8_symbol_phase) {
+		case 0:  ui8_moving_indication = (1 << 4); break;
+		case 1:  ui8_moving_indication = (1 << 3); break;
+		case 2:  ui8_moving_indication = (1 << 5); break;
+		default: ui8_moving_indication = (1 << 0); break;
+	}
+#else
+	// Circle with arrows (bit 0) while the pedal is in the regen part of its
+	// travel (below the neutral band around the zero-torque point).
 	ui8_moving_indication = 0;
-	if (brake_is_set()) {
-		ui8_moving_indication |= (1 << 5);
+	if (ui8_pedal_adc <= GOKART_THR_REGEN_START) {
+		ui8_moving_indication |= (1 << 0);
 	}
 	//if (ebike_app_cruise_control_is_set ()) { ui8_moving_indication |= (1 << 3); }
-	//if (throttle_is_set ()) { ui8_moving_indication |= (1 << 1); }
 	//if (pas_is_set ()) { ui8_moving_indication |= (1 << 4); }
+#endif
 
 
-	// Throttle position, 0..100 over the usable travel: 0 where the motor
-	// starts (rest value plus deadzone, the same zero the bench monitor
-	// uses), 100 at the calibrated maximum. Read raw, no filtering here.
-	ui8_throttle_percent = (uint8_t) map(ui8_adc_read_throttle(), ADC_THROTTLE_MIN_VALUE + GOKART_THROTTLE_DEADZONE, ADC_THROTTLE_MAX_VALUE, 0, 100);
+	// Pedal position, 0..100 over the whole usable travel (lower rail to
+	// upper rail): 0 is full regen, GOKART_THROTTLE_ZERO_PCT (30) is the
+	// zero-torque point, 100 is full drive. Rounded to nearest so the zero
+	// point reads exactly 30.
+	if (ui8_pedal_adc <= GOKART_THR_LO) {
+		ui8_throttle_percent = 0;
+	} else if (ui8_pedal_adc >= GOKART_THR_HI) {
+		ui8_throttle_percent = 100;
+	} else {
+		ui8_throttle_percent = (uint8_t) (((uint16_t) (ui8_pedal_adc - GOKART_THR_LO) * 100 + (GOKART_THR_HI - GOKART_THR_LO) / 2) / (GOKART_THR_HI - GOKART_THR_LO));
+	}
 
 	// Show throttle percent in the speed digits. The LCD turns the wheel
-	// period into km/h with the wheel size set in its own menu, which must
-	// match LCD3_DEFAULT_WHEEL_INCH: period_ms = circumference_mm * 3.6 / kmh.
+	// period into km/h with its own wheel circumference (LCD3_WHEEL_CIRC_MM):
+	// period_ms = circumference_mm * 3.6 / kmh.
 	if (ui8_throttle_percent == 0) {
 		ui16_wheel_period_ms = 4500; // reads as 0
 	} else {
@@ -215,8 +237,8 @@ static void send_message(void) {
 	ui8_tx_buffer [0] = 65;
 	// B1: battery level
 	ui8_tx_buffer [1] = ui8_battery_soc;
-	// B2: 24V controller
-	ui8_tx_buffer [2] = ui8_battery_voltage_nominal;
+	// B2: controller nominal voltage
+	ui8_tx_buffer [2] = LCD3_CONTROLLER_VOLTAGE;
 	// B3: speed, wheel rotation period, ms; period(ms)=B3*256+B4;
 	ui8_tx_buffer [3] = (ui16_wheel_period_ms >> 8) & 0xff;
 	ui8_tx_buffer [4] = ui16_wheel_period_ms & 0xff;
@@ -238,7 +260,7 @@ static void send_message(void) {
 	ui8_tx_buffer [7] = ui8_moving_indication;
 	// B8: pack power, pre-scaled so the LCD's multiply by its own supply
 	// comes out as PB6 current times the PB5 pack voltage.
-	ui8_tx_buffer [8] = motor_power_steps();
+	ui8_tx_buffer [8] = ui8_power_steps;
 
 	// B9: motor temperature, degrees = B9 + 15
 	ui8_tx_buffer [9] = i8_motor_temperature - 15;
@@ -264,6 +286,16 @@ static void send_message(void) {
  * throttle readout tracks as fast as the LCD will follow. */
 void display_tick(void) {
 	update_battery_level();
+
+#if LCD3_SYMBOL_TEST
+	// 50 Hz tick: advance to the next symbol every 250 ticks (5 s)
+	if (++ui8_symbol_tick >= 250) {
+		ui8_symbol_tick = 0;
+		if (++ui8_symbol_phase > 3) {
+			ui8_symbol_phase = 0;
+		}
+	}
+#endif
 
 	if (++ui8_send_tick < 2) {
 		return;

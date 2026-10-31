@@ -40,6 +40,18 @@ static uint8_t ui8_gk_thr_prev1 = 0, ui8_gk_thr_prev2 = 0; // last two raw sampl
 static uint8_t ui8_gk_thr_accepted = 0; // output of the hysteresis deadband
 uint16_t ui16_gk_hold_ticks = 0; // throttle hold test: ticks left on the current held duty (0 = not holding)
 static uint16_t ui16_gk_hold_duty = 0;
+uint32_t ui32_gk_ibat_sum = 0;
+uint16_t ui16_gk_ibat_n = 0;
+int16_t i16_gk_demand = 0;
+uint8_t ui8_gk_regen_target = 0;
+uint16_t ui16_gk_bemf_k_x256 = GOKART_BEMF_DUTY_X256_PER_ERPS;
+int16_t i16_gk_ibat16 = 0;
+static uint16_t ui16_gk_ibat_zero16 = 0; // PB6 with the bridge off, 1/16 counts (0 = not yet primed)
+static uint16_t ui16_gk_vbat_acc = 0; // 16 sample running sum of the 10 bit PB5 reading
+static uint8_t ui8_gk_regen_on = 0; // 1 while the regen loop owns the duty
+static int16_t i16_gk_regen_duty16 = 0; // regen loop duty, 1/16 duty
+static uint16_t ui16_gk_prev_setpoint = 0, ui16_gk_prev_erps = 0; // for the steady-state gate on BEMF learning
+static uint8_t ui8_gk_steady_ticks = 0;
 #endif
 
 static int8_t uint_PWM_Enable = 0; //flag for PWM state
@@ -109,13 +121,53 @@ void aca_setpoint_init(void) {
 
 uint16_t aca_setpoint(uint16_t ui16_time_ticks_between_pas_interrupt, uint16_t setpoint_old) {
 #ifdef GOKART_MODE
-    /* Throttle sets duty directly. The bridge stays off until the throttle
-       leaves its rest deadzone, the brake is released, and the halls are valid. */
+    /* One-pedal control. Above the zero point the pedal sets the duty
+       directly (drive); below it the pedal sets a braking torque (motor
+       current) that a loop on the PB6 shunt holds by pulling the duty under
+       the back-EMF duty (see the GOKART_REGEN notes in config.h). In the
+       neutral band, with the brake on, with invalid halls, or
+       (regen only) below GOKART_REGEN_MIN_ERPS the bridge is off and the
+       motor coasts. */
     {
         uint8_t ui8_throttle_raw = ui8_adc_read_throttle();
         uint8_t ui8_throttle_adc;
-        int16_t i16_throttle_start = (int16_t) ADC_THROTTLE_MIN_VALUE + (int16_t) GOKART_THROTTLE_DEADZONE;
         uint16_t ui16_duty = 0;
+        int16_t i16_demand = 0;
+        uint8_t ui8_drive_ok;
+        uint16_t ui16_vbat;
+        uint16_t ui16_bemf_duty16;
+
+        // mean battery current over the last tick, signed, relative to the bridge-off zero
+        {
+            uint16_t ui16_adc16;
+            if (ui16_gk_ibat_n == 0) {
+                ui16_adc16 = ui16_adc_read_motor_total_current() << 4;
+            } else {
+                ui16_adc16 = (uint16_t) ((ui32_gk_ibat_sum << 4) / ui16_gk_ibat_n);
+            }
+            ui32_gk_ibat_sum = 0;
+            ui16_gk_ibat_n = 0;
+            if (ui16_gk_ibat_zero16 == 0) {
+                ui16_gk_ibat_zero16 = ui16_current_cal_b << 4;
+            }
+            // with the bridge off nothing flows through the shunt: track the zero
+            // (~0.3 s time constant), but only within 3 counts so a real
+            // current is never absorbed into it
+            if (!uint_PWM_Enable && ui16_adc16 + 48 >= ui16_gk_ibat_zero16 && ui16_adc16 <= ui16_gk_ibat_zero16 + 48) {
+                if (ui16_adc16 >= ui16_gk_ibat_zero16) {
+                    ui16_gk_ibat_zero16 += (ui16_adc16 - ui16_gk_ibat_zero16) >> 4;
+                } else {
+                    ui16_gk_ibat_zero16 -= (ui16_gk_ibat_zero16 - ui16_adc16) >> 4;
+                }
+            }
+            i16_gk_ibat16 = (int16_t) (ui16_adc16 - ui16_gk_ibat_zero16);
+        }
+        // pack voltage, 16 sample running average of the 10 bit reading
+        if (ui16_gk_vbat_acc == 0) ui16_gk_vbat_acc = ui16_adc_read_battery_voltage() << 4;
+        ui16_gk_vbat_acc -= ui16_gk_vbat_acc >> 4;
+        ui16_gk_vbat_acc += ui16_adc_read_battery_voltage();
+        ui16_vbat = ui16_gk_vbat_acc >> 4;
+        if (ui16_vbat < 64) ui16_vbat = 64; // sense line open: keep the divisions sane
 
         // raw sample spread between telemetry reports (bench diagnostic)
         if (ui8_gk_thr_min == 0 && ui8_gk_thr_max == 0) {
@@ -148,9 +200,9 @@ uint16_t aca_setpoint(uint16_t ui16_time_ticks_between_pas_interrupt, uint16_t s
             } else if (i16_delta < -GOKART_THROTTLE_DEADBAND) {
                 ui8_gk_thr_accepted = ui8_throttle_adc + GOKART_THROTTLE_DEADBAND;
             }
-            // let the ends of travel be reached despite the lag
-            if (ui8_throttle_adc >= ADC_THROTTLE_MAX_VALUE) ui8_gk_thr_accepted = ui8_throttle_adc;
-            if (ui8_throttle_adc <= i16_throttle_start) ui8_gk_thr_accepted = ui8_throttle_adc;
+            // let the rails be reached despite the lag
+            if (ui8_throttle_adc >= GOKART_THR_HI) ui8_gk_thr_accepted = ui8_throttle_adc;
+            if (ui8_throttle_adc <= GOKART_THR_LO) ui8_gk_thr_accepted = ui8_throttle_adc;
             ui8_throttle_adc = ui8_gk_thr_accepted;
         }
 #endif
@@ -161,8 +213,97 @@ uint16_t aca_setpoint(uint16_t ui16_time_ticks_between_pas_interrupt, uint16_t s
         ui8_throttle_adc = (uint8_t) (ui16_gk_thr_filt >> GOKART_THROTTLE_FILTER_SHIFT);
 #endif
 
-        if (!brake_is_set() && hall_sensors > 0 && hall_sensors < 7 && ui8_throttle_adc > i16_throttle_start) {
-            ui16_duty = (uint16_t) map(ui8_throttle_adc, i16_throttle_start, ADC_THROTTLE_MAX_VALUE, GOKART_MIN_DUTY, GOKART_MAX_DUTY);
+        // pedal position -> demand: +1..+255 drive, -1..-255 regen, 0 neutral.
+        // map() clamps, so beyond the rails the demand sits at +/-255.
+        if (ui8_throttle_adc >= GOKART_THR_DRIVE_START) {
+            i16_demand = (int16_t) map(ui8_throttle_adc, GOKART_THR_DRIVE_START, GOKART_THR_HI, 1, 255);
+        } else if (ui8_throttle_adc <= GOKART_THR_LO) {
+            i16_demand = -255;
+        } else if (ui8_throttle_adc <= GOKART_THR_REGEN_START) {
+            i16_demand = -1 - (int16_t) (((GOKART_THR_REGEN_START - ui8_throttle_adc) * 254) / (GOKART_THR_REGEN_START - GOKART_THR_LO));
+        }
+        i16_gk_demand = i16_demand;
+
+        ui8_drive_ok = !brake_is_set() && hall_sensors > 0 && hall_sensors < 7;
+
+        // back-EMF duty estimate for the present speed and pack voltage, 1/16 duty
+        {
+            uint32_t ui32_t = (uint32_t) ui16_motor_speed_erps * ui16_gk_bemf_k_x256;
+            ui32_t = (ui32_t * GOKART_BEMF_REF_VBAT_ADC) / ui16_vbat; // duty x256
+            ui32_t >>= 4; // duty x16
+            ui16_bemf_duty16 = ui32_t > (255u << 4) ? (255u << 4) : (uint16_t) ui32_t;
+        }
+
+        ui8_gk_regen_target = 0;
+        if (ui8_drive_ok && i16_demand > 0) {
+            // drive: duty straight from the pedal, as before
+            ui16_duty = (uint16_t) map(i16_demand, 1, 255, GOKART_MIN_DUTY, GOKART_MAX_DUTY);
+            ui8_gk_regen_on = 0;
+        }
+#if GOKART_REGEN
+        else if (ui8_drive_ok && i16_demand < 0 && ui16_motor_speed_erps >= GOKART_REGEN_MIN_ERPS) {
+            // regen: motor current (torque) target from the pedal, faded at
+            // low speed and as the pack voltage nears its limit
+            uint16_t ui16_target = ((uint16_t) (-i16_demand) * GOKART_REGEN_MAX_MOTOR_COUNTS) / 255;
+            if (ui16_motor_speed_erps < GOKART_REGEN_FULL_ERPS) {
+                ui16_target = (ui16_target * ui16_motor_speed_erps) / GOKART_REGEN_FULL_ERPS;
+            }
+            if (ui16_vbat >= GOKART_REGEN_VBAT_CUT_ADC) {
+                ui16_target = 0;
+            } else if (ui16_vbat > GOKART_REGEN_VBAT_TAPER_ADC) {
+                ui16_target = (ui16_target * (GOKART_REGEN_VBAT_CUT_ADC - ui16_vbat)) / (GOKART_REGEN_VBAT_CUT_ADC - GOKART_REGEN_VBAT_TAPER_ADC);
+            }
+            ui8_gk_regen_target = (uint8_t) ui16_target;
+
+            if (ui16_target > 0) {
+                int16_t i16_floor16 = (int16_t) (ui16_bemf_duty16 >> 1); // battery current peaks here; below it only the torque grows
+                if (!ui8_gk_regen_on) {
+                    // entry: bridge on just under the BEMF duty, i.e. at about zero current
+                    i16_gk_regen_duty16 = (int16_t) (ui16_bemf_duty16 - (ui16_bemf_duty16 * GOKART_REGEN_ENTRY_MARGIN_PCT) / 100);
+                    ui8_gk_regen_on = 1;
+                } else {
+                    // the battery current this torque means at the duty that produced
+                    // the measurement (last tick's), capped by the pack limit
+                    uint16_t ui16_target_bat16 = (uint16_t) (((uint32_t) ui16_target * ui16_setpoint) >> 4); // target*16*duty/256
+                    if (ui16_target_bat16 > (GOKART_REGEN_MAX_BAT_COUNTS << 4)) ui16_target_bat16 = (GOKART_REGEN_MAX_BAT_COUNTS << 4);
+                    // integral step on the current error: regen short of target -> lower duty
+                    int16_t i16_err16 = (int16_t) ui16_target_bat16 + i16_gk_ibat16; // target - (-ibat), 1/16 counts
+                    int32_t i32_step16 = ((int32_t) i16_err16 * GOKART_REGEN_GAIN_X256) >> 8;
+                    if (i32_step16 > (GOKART_REGEN_SLEW << 4)) i32_step16 = (GOKART_REGEN_SLEW << 4);
+                    if (i32_step16 < -(GOKART_REGEN_SLEW << 4)) i32_step16 = -(GOKART_REGEN_SLEW << 4);
+                    i16_gk_regen_duty16 -= (int16_t) i32_step16;
+                }
+                if (i16_gk_regen_duty16 < i16_floor16) i16_gk_regen_duty16 = i16_floor16;
+                if (i16_gk_regen_duty16 > (255 << 4)) i16_gk_regen_duty16 = (255 << 4);
+                ui16_duty = (uint16_t) (i16_gk_regen_duty16 >> 4);
+                if (ui16_duty < 2) ui16_duty = 0; // never leave the bridge on with the motor shorted
+            } else {
+                ui8_gk_regen_on = 0;
+            }
+        }
+#endif
+        else {
+            ui8_gk_regen_on = 0;
+        }
+
+        // refine the back-EMF constant: with the bridge on, the duty and speed
+        // steady for 100 ms, and the battery current within 3 counts of zero,
+        // the applied duty is the BEMF duty
+        if (ui16_setpoint == ui16_gk_prev_setpoint
+                && ui16_motor_speed_erps + 2 >= ui16_gk_prev_erps && ui16_motor_speed_erps <= ui16_gk_prev_erps + 2) {
+            if (ui8_gk_steady_ticks < 255) ui8_gk_steady_ticks++;
+        } else {
+            ui8_gk_steady_ticks = 0;
+        }
+        ui16_gk_prev_setpoint = ui16_setpoint;
+        ui16_gk_prev_erps = ui16_motor_speed_erps;
+        if (uint_PWM_Enable && ui8_gk_steady_ticks >= 5 && ui16_setpoint >= 16 && ui16_motor_speed_erps >= 20
+                && i16_gk_ibat16 >= -48 && i16_gk_ibat16 <= 48) {
+            uint32_t ui32_k = ((uint32_t) ui16_setpoint << 8) * ui16_vbat / ((uint32_t) ui16_motor_speed_erps * GOKART_BEMF_REF_VBAT_ADC);
+            int16_t i16_k = (int16_t) ui32_k;
+            if (i16_k < (GOKART_BEMF_DUTY_X256_PER_ERPS / 2)) i16_k = GOKART_BEMF_DUTY_X256_PER_ERPS / 2;
+            if (i16_k > (GOKART_BEMF_DUTY_X256_PER_ERPS * 2)) i16_k = GOKART_BEMF_DUTY_X256_PER_ERPS * 2;
+            ui16_gk_bemf_k_x256 += (uint16_t) ((i16_k - (int16_t) ui16_gk_bemf_k_x256) / 8);
         }
 
 #if GOKART_THROTTLE_HOLD_TICKS > 0

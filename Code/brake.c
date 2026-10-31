@@ -36,6 +36,10 @@ void EXTI_PORTA_IRQHandler(void) __interrupt(EXTI_PORTA_IRQHANDLER)
 
 void brake_init (void)
 {
+#if GOKART_IGNORE_AUX_INPUTS
+  // PA4 is left as a reset input. No pull-up, no port-A edge interrupt.
+  return;
+#else
   //hall sensors pins as external input pin interrupt
 #ifdef GOKART_MODE
   // pull-up so an unconnected brake input reads "not braking" instead of floating
@@ -51,14 +55,19 @@ void brake_init (void)
   //initialize the Interrupt sensitivity
   EXTI_SetExtIntSensitivity(EXTI_PORT_GPIOA,
 			    EXTI_SENSITIVITY_RISE_FALL);
+#endif
 }
 
 BitStatus brake_is_set (void)
 {
+#if GOKART_IGNORE_AUX_INPUTS
+  return 0;
+#else
   if (GPIO_ReadInputPin(BRAKE__PORT, BRAKE__PIN) == 0)
     return 1;
   else
     return 0;
+#endif
 }
 
 void brake_coast_enable (void)

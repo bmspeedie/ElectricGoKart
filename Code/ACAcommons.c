@@ -324,6 +324,9 @@ void updateSlowLoopStates(void) {
 		ui8_offroad_state = 0;
 	}
 	
+#if GOKART_IGNORE_AUX_INPUTS
+	return; // brake wire is ignored, so it cannot enter or leave offroad mode
+#endif
 	if (((ui16_aca_flags & BRAKE_DISABLES_OFFROAD) == BRAKE_DISABLES_OFFROAD) && (ui8_offroad_state > 4)) {
 		// if disabling is enabled :)
 		if (!GPIO_ReadInputPin(BRAKE__PORT, BRAKE__PIN)) {

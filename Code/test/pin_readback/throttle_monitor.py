@@ -29,8 +29,12 @@ dwf = CDLL("libdwf.so")
 
 HOST = "127.0.0.1"
 PORT = 8765
-ADC_POSITION_MIN = 53  # ADC_THROTTLE_MIN_VALUE 43 + GOKART_THROTTLE_DEADZONE 10
-ADC_POSITION_MAX = 182
+# Pedal geometry from config.h: rails at ADC_THROTTLE_MIN/MAX_VALUE +/- GOKART_THROTTLE_RAIL_COUNTS,
+# zero-torque point at GOKART_THROTTLE_ZERO_PCT of the travel. Position is 0..100 % of travel
+# (the controller's demand, -255..255, is also reported as "dm").
+ADC_POSITION_MIN = 49  # 43 + 6
+ADC_POSITION_MAX = 176  # 182 - 6
+POSITION_ZERO_PCT = 30
 UART_RX = 0
 HALL_PINS = [6, 7, 15]  # DIO lines wired to the three hall sensor outputs
 BAUD = 9600.0
@@ -336,7 +340,8 @@ def lcd3_frames(data):
 
 REPORT_RE = re.compile(
     rb"thr (\d{1,3})(?: dr (\d{1,3}))? duty (\d{1,3}) hall (-?\d{1,2})"
-    rb"(?: hc (\d{1,5}) hi (\d{1,5}) erps (\d{1,5}))?(?: ang (\d{1,3}))?(?: cur (-?\d{1,4}))?(?: tmin (\d{1,3}) tmax (\d{1,3}))?(?: rst (\d{1,3}) up (\d{1,3}))?(?: hold (\d{1,5}))?(?: rev (\d{1,5}) hb (\d{1,5}) hx (\d{1,5}))?(?: hm (\d{1,5}))?(?: p6 (\d{1,4}))?(?: p4 (\d{1,4}))?(?: pc (\d{1,3}))?(?: bv (\d{1,4}))?(?: wz (\d{1,3}))?\r?\n"
+    rb"(?: hc (\d{1,5}) hi (\d{1,5}) erps (\d{1,5}))?(?: ang (\d{1,3}))?(?: cur (-?\d{1,4}))?(?: tmin (\d{1,3}) tmax (\d{1,3}))?(?: rst (\d{1,3}) up (\d{1,3}))?(?: hold (\d{1,5}))?(?: rev (\d{1,5}) hb (\d{1,5}) hx (\d{1,5}))?(?: hm (\d{1,5}))?(?: p6 (\d{1,4}))?(?: p4 (\d{1,4}))?(?: pc (\d{1,3}))?(?: bv (\d{1,4}))?(?: wz (\d{1,3}))?"
+    rb"(?: dm (-?\d{1,3}))?(?: rt (\d{1,3}))?(?: bk (\d{1,5}))?\r?\n"
 )
 
 
@@ -376,6 +381,12 @@ def text_reports(data):
                 r["bv"] = int(m.group(22))
             if m.group(23) is not None:
                 r["wz"] = int(m.group(23))
+            if m.group(24) is not None:
+                r["dm"] = int(m.group(24))  # pedal demand: -255 full regen .. 0 coast .. 255 full drive
+            if m.group(25) is not None:
+                r["rt"] = int(m.group(25))  # regen motor-current target in use, PB6 counts (0 outside regen)
+            if m.group(26) is not None:
+                r["bk"] = int(m.group(26))  # back-EMF constant in use, duty per erps x256
             yield r
 
 
@@ -448,6 +459,9 @@ def read_uart(hdwf):
             state["p4"] = parsed.get("p4", state.get("p4"))
             state["bv"] = parsed.get("bv", state.get("bv"))
             state["wz"] = parsed.get("wz", state.get("wz"))
+            state["dm"] = parsed.get("dm", state.get("dm"))
+            state["rt"] = parsed.get("rt", state.get("rt"))
+            state["bk"] = parsed.get("bk", state.get("bk"))
             state["uart_at"] = now
             if "hc" in parsed:
                 m = state["mcu"]
@@ -516,8 +530,9 @@ PAGE = """<!DOCTYPE html>
   .voltage span { font-size: 28px; color: #9a9a9a; margin-left: 8px; }
   .label { font-size: 14px; color: #9a9a9a; }
   .position { font-size: 40px; font-weight: 600; margin: 4px 0 12px; }
-  .track { height: 18px; background: #2a2a2a; border-radius: 9px; overflow: hidden; }
+  .track { height: 18px; background: #2a2a2a; border-radius: 9px; overflow: hidden; position: relative; }
   .fill { height: 100%; width: 0%; background: #3d9a6a; }
+  .zero { position: absolute; top: 0; bottom: 0; width: 2px; background: #e0b04a; }
   .meta { margin-top: 22px; color: #bdbdbd; font-size: 15px; }
   .stale { color: #d0a24a; }
   .row { display: flex; gap: 32px; margin: 0 0 28px; }
@@ -545,7 +560,7 @@ PAGE = """<!DOCTYPE html>
   </div>
   <div class="label">Throttle position</div>
   <div class="position" id="position">–</div>
-  <div class="track"><div class="fill" id="fill"></div></div>
+  <div class="track"><div class="fill" id="fill"></div><div class="zero" id="zero" title="zero-torque point: regen to the left, drive to the right"></div></div>
   <div class="label" style="margin-top:28px">Hall sensors</div>
   <div class="big" id="halls">–</div>
   <div class="sub" id="halls_sub"></div>
@@ -583,6 +598,8 @@ async function tick() {
     const pos = s.position == null ? null : Math.round(s.position);
     document.getElementById('position').textContent = pos == null ? '–' : pos + '%';
     document.getElementById('fill').style.width = (pos == null ? 0 : pos) + '%';
+    document.getElementById('fill').style.background = (s.dm != null && s.dm < 0) ? '#b0583a' : '#3d9a6a';
+    document.getElementById('zero').style.left = s.position_zero_pct + '%';
     const hallsEl = document.getElementById('halls');
     const hallsSub = document.getElementById('halls_sub');
     if (s.hall_levels) {
@@ -636,6 +653,9 @@ async function tick() {
     const parts = [];
     if (s.position_source) parts.push('position from ' + s.position_source);
     if (s.dr != null) parts.push('ADC_DR ' + s.dr);
+    if (s.dm != null) parts.push(s.dm > 0 ? 'drive ' + Math.round(s.dm * 100 / 255) + '%' : (s.dm < 0 ? 'regen ' + Math.round(-s.dm * 100 / 255) + '%' + (s.rt != null ? ' (target ' + s.rt + ' cnt)' : '') : 'coast'));
+    if (s.cur != null) parts.push('cur ' + s.cur + ' cnt');
+    if (s.bk != null) parts.push('bemf k ' + (s.bk / 256).toFixed(2));
     if (s.duty != null) parts.push('duty ' + s.duty);
     if (s.hall != null) parts.push('hall ' + s.hall);
     if (s.voltage_max != null) parts.push('peak ' + s.voltage_max.toFixed(2) + ' V');
@@ -735,9 +755,13 @@ class Handler(BaseHTTPRequestHandler):
                 "p4": snap.get("p4") if source == "controller" else None,
                 "bv": snap.get("bv") if source == "controller" else None,
                 "wz": snap.get("wz") if source == "controller" else None,
+                "dm": snap.get("dm") if source == "controller" else None,
+                "rt": snap.get("rt") if source == "controller" else None,
+                "bk": snap.get("bk") if source == "controller" else None,
                 "hall": snap["hall"] if source == "controller" else None,
                 "hold": snap.get("hold") if source == "controller" else None,
                 "position": position,
+                "position_zero_pct": POSITION_ZERO_PCT,
                 "position_source": source,
                 "position_max": snap["position_max"],
                 "link": link,

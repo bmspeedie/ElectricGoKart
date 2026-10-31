@@ -65,9 +65,31 @@
 
 // Go-Kart specific modifications
 #define GOKART_MODE 1  // Enable go-kart mode
+// Spare controller wires are ignored: brake (PA4), cruise (PA2), self-study
+// (PA5), low/high (PB3), 3-speed (PG1), hard boot (PG0). None of them can
+// hold startup, cut drive, or change a mode.
+#define GOKART_IGNORE_AUX_INPUTS 1
 #define GOKART_MAX_SPEED_KPH 80  // Maximum speed for go-kart
 #define GOKART_THROTTLE_DIRECT 1  // Direct throttle mapping without ramping
-#define GOKART_THROTTLE_DEADZONE 10  // counts above ADC_THROTTLE_MIN_VALUE before power starts
+// One-pedal throttle geometry. The usable travel is the ADC_THROTTLE_MIN/MAX
+// range with RAIL counts clipped off each end, so the demand reaches its rail
+// a little before the pedal reaches its mechanical stop and sits there
+// despite ADC noise. ZERO_PCT of that travel is the zero-torque point: above
+// it the pedal is a drive command (0..full duty), below it a regen command
+// (0..full regen current, full at the bottom rail). NEUTRAL counts either
+// side of the zero point give zero demand (bridge off, coast) so the pedal
+// can be held at zero torque without flipping between drive and regen.
+// With 43..182: travel 49..176, zero at 87 (85..89 neutral), regen 49..85,
+// drive 89..176.
+#define GOKART_THROTTLE_RAIL_COUNTS 6
+#define GOKART_THROTTLE_ZERO_PCT 30
+#define GOKART_THROTTLE_NEUTRAL_COUNTS 2
+// derived, do not edit
+#define GOKART_THR_LO (ADC_THROTTLE_MIN_VALUE + GOKART_THROTTLE_RAIL_COUNTS)
+#define GOKART_THR_HI (ADC_THROTTLE_MAX_VALUE - GOKART_THROTTLE_RAIL_COUNTS)
+#define GOKART_THR_ZERO (GOKART_THR_LO + ((GOKART_THR_HI - GOKART_THR_LO) * GOKART_THROTTLE_ZERO_PCT) / 100)
+#define GOKART_THR_DRIVE_START (GOKART_THR_ZERO + GOKART_THROTTLE_NEUTRAL_COUNTS)
+#define GOKART_THR_REGEN_START (GOKART_THR_ZERO - GOKART_THROTTLE_NEUTRAL_COUNTS)
 #define GOKART_MAX_DUTY 255
 // Duty applied as soon as the throttle leaves the deadzone. Below ~22 the
 // motor only cogs/hunts at the edge of stall (dead time eats most of the
@@ -89,6 +111,62 @@
 // 3. Exponential average over ~2^N samples (2 -> ~80 ms). Off: it slows the
 //    response and only attenuates spikes rather than rejecting them.
 #define GOKART_THROTTLE_FILTER_SHIFT 0
+// Regenerative braking (pedal below the zero point). The bridge is
+// complementary PWM, so a duty below the back-EMF-equivalent duty pushes
+// current back into the pack; the controller closes a loop on the PB6 shunt
+// (battery current) to hold the braking torque the pedal asks for.
+// Torque follows the motor current, and motor current = battery current /
+// duty fraction. Battery current alone is a poor target: it is zero at the
+// BEMF duty, peaks at about half of it, and falls back to zero at duty 0
+// where the motor is shorted (maximum torque, nothing into the pack), and
+// at low speed the pedal's battery current is simply unreachable, which
+// would send the duty to the floor and the torque far past what was asked.
+// So the pedal sets a motor current; each tick it is converted to the
+// battery current expected at the present duty (motor current x duty/256),
+// which is monotonic in duty, and that is what the loop holds. The loop is
+// entered from an estimate of the BEMF duty (about zero current) and is
+// never allowed below half of that estimate.
+#define GOKART_REGEN 1
+// Motor (phase-equivalent) current at full regen, in PB6 counts
+// (1 count ~ 0.66 A on this board, so 60 ~ 40 A). The pedal is linear in
+// this. For reference the drive side applies no current limit at all.
+#define GOKART_REGEN_MAX_MOTOR_COUNTS 60
+// Cap on the current into the pack whatever the pedal asks, PB6 counts
+// (30 ~ 20 A, ~1.4 kW at 72 V). Whichever of the two limits is reached
+// first holds.
+#define GOKART_REGEN_MAX_BAT_COUNTS 30
+// Above FULL_ERPS the full torque is available. Below it the target fades
+// linearly with speed so the braking does not end in a step. Below MIN_ERPS
+// regen is off (coast): the halls cannot give a usable speed there.
+#define GOKART_REGEN_FULL_ERPS 40
+#define GOKART_REGEN_MIN_ERPS 10
+// Back-EMF constant: duty per erps, x256, at a PB5 pack-voltage reading of
+// REF_VBAT_ADC (the duty for a given speed scales with 1/Vbat). No-load
+// bench (31 Oct, bv 736): duty 189 at 151 erps, 99 at 78, 90 at 70 -> 1.25.
+// The firmware refines this on its own whenever the bridge is on with the
+// battery current within 3 counts of zero (that is the BEMF duty); "bk" in
+// the telemetry is the value in use.
+#define GOKART_BEMF_DUTY_X256_PER_ERPS 320
+#define GOKART_BEMF_REF_VBAT_ADC 736
+// Regen starts this percent below the BEMF estimate so an estimate on the
+// high side does not give a drive kick on entry. Kept small: one duty is
+// 0.28 V at 72 V, several amps through a low-resistance motor.
+#define GOKART_REGEN_ENTRY_MARGIN_PCT 2
+// Loop: each 50 Hz tick the duty moves by (battery current error in counts)
+// * GAIN_X256 / 256, at most SLEW duty per tick. One duty step is several
+// amps on a low-resistance motor, so the gain is kept small. If the
+// current alternates tick to tick in regen, halve GAIN; if it takes more
+// than ~0.3 s to settle, double it.
+#define GOKART_REGEN_GAIN_X256 32
+#define GOKART_REGEN_SLEW 8
+// Overvoltage taper on the raw 10 bit PB5 reading ("bv" in the telemetry):
+// the regen target falls linearly from full at TAPER to zero at CUT. The
+// PB5 calibration for the 72 V pack is not settled (bv 736 was read on the
+// bench supply, believed 60 V, ~12.3 counts/V, which would put 84 V past
+// the ADC's full scale), so these defaults are set just under full scale:
+// a full pack gets no regen until bv has been checked against a meter.
+#define GOKART_REGEN_VBAT_TAPER_ADC 980
+#define GOKART_REGEN_VBAT_CUT_ADC 1010
 // Bench test for hunting: when the throttle leaves the deadzone, sample it
 // once and hold that duty for this many 50 Hz ticks (250 = 5 s) no matter
 // what the throttle reading does, then re-sample and hold again. Releasing
@@ -151,8 +229,22 @@
 #define GOKART_ANGLE_SWEEP_STEP 4
 #define GOKART_ANGLE_SWEEP_START 170
 #define GOKART_ANGLE_SWEEP_END 214 // inclusive, then wraps to START
-#define LCD3_DEFAULT_WHEEL_INCH 26  // wheel size the speed digits assume; set the LCD3's wheel menu to this
-#define LCD3_CURRENT_DEADBAND 1  // PB6 counts above the boot zero before the watts field leaves 0
+// Wheel circumference, mm, that the LCD3 uses to turn the wheel period into
+// km/h; the throttle digits are scaled through it. Measured on the bench
+// (31 Oct) from two readings against the monitor: 65 shown for 34 sent with
+// a 1277 mm assumption, 72 shown for 60 sent with 2075 mm. Both give the LCD
+// about 2460 mm (26" x 79.8 would be 2075). Changing the wheel size in the
+// LCD's menu changes this. The code the LCD reports is "wz" in the telemetry.
+#define LCD3_WHEEL_CIRC_MM 2460
+// B2, the controller's nominal pack voltage. 72 V system (20S li-ion).
+#define LCD3_CONTROLLER_VOLTAGE 72
+// Bench test: cycle the B7 status symbols 5 s each instead of the brake flag.
+// On this LCD3 (31 Oct): bit 4 assist, bit 3 cruise "C", bit 5 cruise with
+// assist flashing (no brake symbol exists), bit 0 the circle with arrows,
+// which the normal build shows while the pedal is below the zero point.
+#define LCD3_SYMBOL_TEST 0
+// PB6 counts above the idle zero before the watts field leaves 0
+#define LCD3_CURRENT_DEADBAND 1
 // The LCD multiplies the current byte by the voltage on its own supply wires,
 // in tenths of a volt (the VOL page). That feed is the bench supply, not the
 // pack, so the byte is scaled by pack_voltage / this value.

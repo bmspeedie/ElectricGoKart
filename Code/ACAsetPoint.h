@@ -25,6 +25,13 @@ uint16_t aca_setpoint (uint16_t ui16_time_ticks_between_pas_interrupt, uint16_t 
 void aca_setpoint_init(void);
 extern uint8_t ui8_gk_thr_min, ui8_gk_thr_max;
 extern uint16_t ui16_gk_hold_ticks;
+// PB6 (battery current) samples accumulated by the main loop between slow-loop ticks
+extern uint32_t ui32_gk_ibat_sum;
+extern uint16_t ui16_gk_ibat_n;
+extern int16_t i16_gk_demand; // pedal demand, -255 (full regen) .. 0 (coast) .. 255 (full drive)
+extern uint8_t ui8_gk_regen_target; // regen motor current (torque) target in use after derating, PB6 counts; 0 outside regen
+extern uint16_t ui16_gk_bemf_k_x256; // back-EMF constant in use, duty per erps x256 at GOKART_BEMF_REF_VBAT_ADC
+extern int16_t i16_gk_ibat16; // last tick's mean battery current, 1/16 PB6 counts, + out of the pack
 
 #endif /* ACASETPOINT_H */
 

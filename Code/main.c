@@ -120,10 +120,13 @@ int main(void) {
 
 	gpio_init();
 	brake_init();
+#if !GOKART_IGNORE_AUX_INPUTS
 	while (brake_is_set()); // hold here while brake is pressed -- this is a protection for development
+#endif
 	debug_pin_init();
 	light_pin_init();
-	
+
+#if !GOKART_IGNORE_AUX_INPUTS
 	// Initialize new control pins
 	cruise_pin_init();
 	reverse_pin_init();
@@ -131,6 +134,7 @@ int main(void) {
 	low_high_pin_init();
 	three_speed_pin_init();
 	hard_boot_pin_init();
+#endif
 	back_emf_pins_init();
 	timer2_init();
 	uart_init();
@@ -179,9 +183,17 @@ int main(void) {
 		// average both current ADC pins between telemetry reports
 		// p6 is PB6, the shunt amplifier (the sample from the PWM update
 		// interrupt; ~7 counts at 4.6 A). p4 is PB4, not on the shunt.
-		ui32_gk_cur_sum += ui16_adc_read_motor_total_current();
-		ui32_gk_x4_sum += ui16_adc_read_x4_value();
-		ui16_gk_cur_n++;
+		{
+			uint16_t ui16_p6_now = ui16_adc_read_motor_total_current();
+			ui32_gk_cur_sum += ui16_p6_now;
+			ui32_gk_x4_sum += ui16_adc_read_x4_value();
+			ui16_gk_cur_n++;
+			// same samples, averaged per 50 Hz tick for the regen current loop (consumed by aca_setpoint)
+			if (ui16_gk_ibat_n < 65535) {
+				ui32_gk_ibat_sum += ui16_p6_now;
+				ui16_gk_ibat_n++;
+			}
+		}
 #endif
 
 		updateSpeeds();
@@ -251,7 +263,7 @@ int main(void) {
 				// bench telemetry for the throttle monitor, every other very-slow loop (~240 ms).
 				// TX is queued (uart_put_buffered, drained by the UART TX interrupt) so this no longer
 				// stalls the 50 Hz slow loop, but 9600 baud only carries ~960 chars/s and the
-				// LCD3 frames (300 chars/s) share the line. A running line is ~150 chars, so the
+				// LCD3 frames (300 chars/s) share the line. A running line is ~155 chars (~180 worst case), so the
 				// budget is tight: a line is only started when the previous one has drained
 				// (queue below 64 of 256 bytes, enough room for the line plus a frame).
 				// Otherwise the line overran the queue while the motor turned and every line
@@ -288,8 +300,12 @@ int main(void) {
 					// size code the LCD3 sent (255 = none yet); the speed digits use the
 					// measured LCD3_WHEEL_CIRC_MM regardless.
 					// p4 (PB4) is not reported: it is not on the shunt and reads a constant 301.
+					// "dm" is the pedal demand (-255 full regen .. 0 coast .. 255 full drive),
+					// "rt" the regen motor-current (torque) target in PB6 counts after the speed
+					// and voltage derating (0 outside regen), "bk" the back-EMF constant in use
+					// (duty per erps x256 at bv GOKART_BEMF_REF_VBAT_ADC).
 					(void) ui16_p4;
-					printf("thr %u duty %u hall %d hc %u hi %u erps %u cur %d tmin %u tmax %u rst %u up %u rev %u hb %u hx %u hm %u p6 %u pc %u bv %u wz %u\r\n", ui8_adc_read_throttle(), ui16_setpoint, (int) hall_sensors, ui16_hall_changes, ui16_hall_invalid, ui16_motor_speed_erps, i16_cur, ui8_gk_thr_min, ui8_gk_thr_max, ui8_gk_reset_flags, ui8_uptime, ui16_hall_erevs, ui16_hall_back, ui16_hall_seq_err, ui16_hall_masked, ui16_p6, ui8_position_correction_value, ui16_adc_read_battery_voltage(), lcd_configuration_variables.ui8_wheel_size);
+					printf("thr %u duty %u hall %d hc %u hi %u erps %u cur %d tmin %u tmax %u rst %u up %u rev %u hb %u hx %u hm %u p6 %u pc %u bv %u wz %u dm %d rt %u bk %u\r\n", ui8_adc_read_throttle(), ui16_setpoint, (int) hall_sensors, ui16_hall_changes, ui16_hall_invalid, ui16_motor_speed_erps, i16_cur, ui8_gk_thr_min, ui8_gk_thr_max, ui8_gk_reset_flags, ui8_uptime, ui16_hall_erevs, ui16_hall_back, ui16_hall_seq_err, ui16_hall_masked, ui16_p6, ui8_position_correction_value, ui16_adc_read_battery_voltage(), lcd_configuration_variables.ui8_wheel_size, i16_gk_demand, ui8_gk_regen_target, ui16_gk_bemf_k_x256);
 #endif
 #endif
 					ui8_gk_thr_min = ui8_gk_thr_max = 0;
