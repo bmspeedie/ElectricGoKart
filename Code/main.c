@@ -271,11 +271,25 @@ int main(void) {
 					i16_cur = ui16_n ? (int16_t) ((uint32_t) (ui32_gk_cur_sum_copy * 16UL) / ui16_n) - (int16_t) (ui16_current_cal_b * 16) : 0;
 					printf("thr %u duty %u hall %d hc %u hi %u erps %u ang %u cur %d tmin %u tmax %u rst %u up %u hold %u rev %u hb %u hx %u hm %u\r\n", ui8_adc_read_throttle(), ui16_setpoint, (int) hall_sensors, ui16_hall_changes, ui16_hall_invalid, ui16_motor_speed_erps, ui8_s_motor_angle, i16_cur, ui8_gk_thr_min, ui8_gk_thr_max, ui8_gk_reset_flags, ui8_uptime, ui16_gk_hold_ticks, ui16_hall_erevs, ui16_hall_back, ui16_hall_seq_err, ui16_hall_masked);
 #else
+#if GOKART_THROTTLE_HOLD_TICKS > 0
 					printf("thr %u duty %u hall %d hc %u hi %u erps %u cur %d tmin %u tmax %u rst %u up %u hold %u rev %u hb %u hx %u hm %u p6 %u p4 %u\r\n", ui8_adc_read_throttle(), ui16_setpoint, (int) hall_sensors, ui16_hall_changes, ui16_hall_invalid, ui16_motor_speed_erps, i16_cur, ui8_gk_thr_min, ui8_gk_thr_max, ui8_gk_reset_flags, ui8_uptime, ui16_gk_hold_ticks, ui16_hall_erevs, ui16_hall_back, ui16_hall_seq_err, ui16_hall_masked, ui16_p6, ui16_p4);
+#else
+					// "pc" is the FOC angle correction (127 = neutral, 360/256 deg per count)
+					printf("thr %u duty %u hall %d hc %u hi %u erps %u cur %d tmin %u tmax %u rst %u up %u rev %u hb %u hx %u hm %u p6 %u p4 %u pc %u\r\n", ui8_adc_read_throttle(), ui16_setpoint, (int) hall_sensors, ui16_hall_changes, ui16_hall_invalid, ui16_motor_speed_erps, i16_cur, ui8_gk_thr_min, ui8_gk_thr_max, ui8_gk_reset_flags, ui8_uptime, ui16_hall_erevs, ui16_hall_back, ui16_hall_seq_err, ui16_hall_masked, ui16_p6, ui16_p4, ui8_position_correction_value);
+#endif
 #endif
 					ui8_gk_thr_min = ui8_gk_thr_max = 0;
 #if GOKART_HALL_TRACE
 					// hall changes as state:dwell (PWM cycles of 64 us), oldest first; the backward step is 8 entries before the end
+					{
+						// besides the backward-step trigger in motor.c, capture 16 fresh changes every ~1 s while
+						// turning so the sector dwells (hall placement) can be read at steady speed
+						static uint8_t ui8_trace_arm_tick = 0;
+						if (++ui8_trace_arm_tick >= 8) {
+							ui8_trace_arm_tick = 0;
+							if (!ui8_hall_trace_frozen && ui8_hall_trace_post == 0 && ui16_motor_speed_erps > 3) ui8_hall_trace_post = 16;
+						}
+					}
 					if (ui8_hall_trace_frozen) {
 						uint8_t ui8_t;
 						printf("hd");

@@ -60,7 +60,7 @@ uint8_t ui8_hall_trace_state[16];
 uint8_t ui8_hall_trace_dwell[16];
 uint8_t ui8_hall_trace_pos = 0; // next write index = oldest entry once frozen
 uint8_t ui8_hall_trace_frozen = 0; // 1: holding a capture for the main loop to print
-static uint8_t ui8_hall_trace_post = 0; // changes still to record after the trigger
+uint8_t ui8_hall_trace_post = 0; // changes still to record after the trigger (main.c also arms this periodically)
 static uint8_t ui8_hall_dwell = 0; // PWM cycles in the current raw state
 #define HALL_TRACE_TRIGGER() do { if (!ui8_hall_trace_frozen && ui8_hall_trace_post == 0 && ui16_motor_speed_erps > 3) ui8_hall_trace_post = 8; } while (0)
 #else

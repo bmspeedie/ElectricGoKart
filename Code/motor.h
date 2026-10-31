@@ -24,7 +24,7 @@ extern uint16_t ui16_hall_changes;
 extern uint16_t ui16_hall_invalid;
 extern uint16_t ui16_hall_erevs, ui16_hall_back, ui16_hall_seq_err, ui16_hall_masked;
 #if GOKART_HALL_TRACE
-extern uint8_t ui8_hall_trace_state[16], ui8_hall_trace_dwell[16], ui8_hall_trace_pos, ui8_hall_trace_frozen;
+extern uint8_t ui8_hall_trace_state[16], ui8_hall_trace_dwell[16], ui8_hall_trace_pos, ui8_hall_trace_frozen, ui8_hall_trace_post;
 #endif
 extern uint8_t ui8_sinetable_position;
 extern uint16_t ui16_speed_inverse;

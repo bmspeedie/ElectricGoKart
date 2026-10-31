@@ -43,6 +43,11 @@
 // Go-kart motor hall placement, measured on the bench (hall dwell at constant
 // speed): states 4, 2, 1 last ~37 deg electrical and 6, 3, 5 last ~83 deg,
 // i.e. each hall sensor is high for ~203 deg. 256 units = 360 deg.
+// Re-measured 31 Oct with clean (locked-out) edges at offset 202, no load:
+//   51-117 erps, cur 1-4:  4/6/2/3/1/5 = 40/78/43/79/41/80 deg  (table within 3 deg)
+//   159 erps, cur 7:                    45/72/49/71/49/73 deg
+// The widths move with stator current (short sectors grow), so the table is
+// only right for one load; left as is.
 #define ANGLE_4_0 1
 #define ANGLE_6_60 27
 #define ANGLE_2_120 86
