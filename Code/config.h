@@ -22,7 +22,7 @@
 #define BATTERY_CURRENT_MAX_VALUE 64L
 #define PHASE_CURRENT_MAX_VALUE 350L
 #define REGEN_CURRENT_MAX_VALUE 50L
-#define MOTOR_ROTOR_DELTA_PHASE_ANGLE_RIGHT 214
+#define MOTOR_ROTOR_DELTA_PHASE_ANGLE_RIGHT 202
 #define current_cal_a 46
 #define LEVEL_1 26
 #define LEVEL_2 38
@@ -133,12 +133,25 @@
 // GOKART_ANGLE_SWEEP_STEP every ~3 s while running and report it as "ang"
 // in the telemetry line, so the best offset can be read off speed vs angle.
 // Disable once MOTOR_ROTOR_DELTA_PHASE_ANGLE_RIGHT has been set for this motor.
+// First pass (step 16, 166..246, bouncing hall edges) gave 214. Fine passes
+// (step 4, 166..238, duty 59-65, no load, 31 Oct) after the hall lockout:
+//   170-178  slow, high current (over-retarded)
+//   186      current minimum
+//   190-210  speed flat, current flat, hall sensors completely clean (hm 0)
+//   214      speed +15 %, hall dither begins (the "noise" the lockout hides)
+//   218+     rocking, stall by 230
+// i.e. 214 sat on the advance-side cliff, and the hall dither is the stator
+// field disturbing the sensors there. 202 = middle of the clean window.
 #define GOKART_ANGLE_SWEEP 0
-#define GOKART_ANGLE_SWEEP_STEP 16
-#define GOKART_ANGLE_SWEEP_START 166
-#define GOKART_ANGLE_SWEEP_END 246 // inclusive, then wraps to START
+#define GOKART_ANGLE_SWEEP_STEP 4
+#define GOKART_ANGLE_SWEEP_START 170
+#define GOKART_ANGLE_SWEEP_END 214 // inclusive, then wraps to START
 #define LCD3_DEFAULT_WHEEL_INCH 26  // wheel size assumed for the speed digits until the LCD3 reports its own setting
-#define LCD3_CURRENT_DEADBAND 4  // ADC counts above the boot offset before the watts field shows anything
+#define LCD3_CURRENT_DEADBAND 1  // PB6 counts above the boot zero before the watts field leaves 0
+// The LCD multiplies the current byte by the voltage on its own supply wires,
+// in tenths of a volt (the VOL page). That feed is the bench supply, not the
+// pack, so the byte is scaled by pack_voltage / this value.
+#define LCD3_SUPPLY_DV 309
 // LCD3 battery icon, tenths of a volt. 20S li-ion: 84.0 V full, 60.0 V empty.
 // Bars at 10/25/50/75 % of the span; below EMPTY the icon border flashes.
 #define LCD3_BATTERY_FULL_DV 840

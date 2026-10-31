@@ -252,6 +252,7 @@ int main(void) {
 				// averages (0 = 0 V, 1023 = ADC reference, 5 V on this board).
 				{
 					uint16_t ui16_n = ui16_gk_cur_n;
+					uint32_t ui32_gk_cur_sum_copy = ui32_gk_cur_sum;
 					uint16_t ui16_p6 = ui16_n ? (uint16_t) (ui32_gk_cur_sum / ui16_n) : 0;
 					uint16_t ui16_p4 = ui16_n ? (uint16_t) (ui32_gk_x4_sum / ui16_n) : 0;
 					int16_t i16_cur = ui16_n ? (int16_t) ui16_p6 - (int16_t) ui16_current_cal_b : 0;
@@ -261,7 +262,17 @@ int main(void) {
 					// "hold" is the throttle-hold test: slow-loop ticks left before the duty is re-sampled (0 = live throttle)
 					// "rev" electrical revolutions, "hb" backward hall steps, "hx" non-neighbour hall jumps (all wrap at 65536)
 					// (printf blocks for the whole line at 9600 baud, ~1 ms per character, so keep it short)
+#if GOKART_ANGLE_SWEEP
+					// sweep build: report the angle offset under test instead of p6/p4 (line must stay < ~130 chars),
+					// and "cur" in 1/16 ADC counts (the window average has sub-count resolution) so the current
+					// minimum vs angle is resolvable
+					(void) ui16_p4;
+					(void) ui16_p6;
+					i16_cur = ui16_n ? (int16_t) ((uint32_t) (ui32_gk_cur_sum_copy * 16UL) / ui16_n) - (int16_t) (ui16_current_cal_b * 16) : 0;
+					printf("thr %u duty %u hall %d hc %u hi %u erps %u ang %u cur %d tmin %u tmax %u rst %u up %u hold %u rev %u hb %u hx %u hm %u\r\n", ui8_adc_read_throttle(), ui16_setpoint, (int) hall_sensors, ui16_hall_changes, ui16_hall_invalid, ui16_motor_speed_erps, ui8_s_motor_angle, i16_cur, ui8_gk_thr_min, ui8_gk_thr_max, ui8_gk_reset_flags, ui8_uptime, ui16_gk_hold_ticks, ui16_hall_erevs, ui16_hall_back, ui16_hall_seq_err, ui16_hall_masked);
+#else
 					printf("thr %u duty %u hall %d hc %u hi %u erps %u cur %d tmin %u tmax %u rst %u up %u hold %u rev %u hb %u hx %u hm %u p6 %u p4 %u\r\n", ui8_adc_read_throttle(), ui16_setpoint, (int) hall_sensors, ui16_hall_changes, ui16_hall_invalid, ui16_motor_speed_erps, i16_cur, ui8_gk_thr_min, ui8_gk_thr_max, ui8_gk_reset_flags, ui8_uptime, ui16_gk_hold_ticks, ui16_hall_erevs, ui16_hall_back, ui16_hall_seq_err, ui16_hall_masked, ui16_p6, ui16_p4);
+#endif
 					ui8_gk_thr_min = ui8_gk_thr_max = 0;
 #if GOKART_HALL_TRACE
 					// hall changes as state:dwell (PWM cycles of 64 us), oldest first; the backward step is 8 entries before the end
