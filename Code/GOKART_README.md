@@ -74,7 +74,24 @@ zero-torque point:
 
 With the pedal released the kart brakes (regen). Hold it at ~30 % to coast.
 
-### 4. Safety Features
+### 4. Reverse Switch
+The controller's "hard boot" wire (PG0) is the reverse switch. It has the
+MCU's pull-up and idles high (forward); short it to ground for reverse. The
+direction is read at power-up and then continuously, but a change is only
+taken once the switch has held for 100 ms, the motor has stopped (no
+electrical revolution for ~0.2 s) and the pedal is in the coast band (bridge
+off). Flipping it while rolling does nothing until the kart has stopped;
+there is no drive cut and no change in the one-pedal behaviour. `dir` in
+the telemetry (0 forward, 1 reverse) shows the direction in use.
+
+Reverse is done in software by undoing the A/C phase and hall exchange
+(`GOKART_SWAP_PHASE_AC`), which mirrors the commutation, and loading
+`GOKART_REVERSE_MOTOR_ANGLE` as the commutation offset. That offset cannot
+be derived exactly from the forward one (see the note in `config.h`); the
+default is the middle of the plausible range and should be confirmed on the
+bench with `GOKART_ANGLE_SWEEP` in reverse (set the sweep window around it).
+
+### 5. Safety Features
 The go-kart mode maintains these safety features:
 - **Undervoltage Protection**: Stops motor if battery voltage drops below minimum
 - **Overcurrent Protection**: Limits battery and phase current
@@ -111,6 +128,13 @@ and is never allowed below half of that estimate.
 ```
 The brake switch, invalid hall states and speeds below `GOKART_REGEN_MIN_ERPS`
 all turn the bridge off (coast) in regen as well as in drive.
+
+### Reverse
+```c
+#define GOKART_REVERSE_SWITCH 1            // PG0 low = reverse
+#define GOKART_REVERSE_DEBOUNCE_TICKS 5    // 50 Hz ticks the switch must hold (100 ms)
+#define GOKART_REVERSE_MOTOR_ANGLE 128     // commutation offset in reverse, bench-confirm
+```
 
 ### Power Limits
 ```c

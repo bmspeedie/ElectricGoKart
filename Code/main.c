@@ -135,11 +135,17 @@ int main(void) {
 	three_speed_pin_init();
 	hard_boot_pin_init();
 #endif
+#if GOKART_REVERSE_SWITCH
+	hard_boot_pin_init(); // PG0 with pull-up: the reverse switch
+#endif
 	back_emf_pins_init();
 	timer2_init();
 	uart_init();
 	eeprom_init();
 	controllerstate_init();
+#if GOKART_REVERSE_SWITCH
+	motor_direction_init(); // after the EEPROM has set ui8_s_motor_angle, before the first hall read
+#endif
 	initErpsRatio();
 	pwm_init();
 	hall_sensor_init();
@@ -303,9 +309,15 @@ int main(void) {
 					// "dm" is the pedal demand (-255 full regen .. 0 coast .. 255 full drive),
 					// "rt" the regen motor-current (torque) target in PB6 counts after the speed
 					// and voltage derating (0 outside regen), "bk" the back-EMF constant in use
-					// (duty per erps x256 at bv GOKART_BEMF_REF_VBAT_ADC).
+					// (duty per erps x256 at bv GOKART_BEMF_REF_VBAT_ADC), "dir" the
+					// direction in use (0 forward, 1 reverse; PG0 switch).
 					(void) ui16_p4;
-					printf("thr %u duty %u hall %d hc %u hi %u erps %u cur %d tmin %u tmax %u rst %u up %u rev %u hb %u hx %u hm %u p6 %u pc %u bv %u wz %u dm %d rt %u bk %u\r\n", ui8_adc_read_throttle(), ui16_setpoint, (int) hall_sensors, ui16_hall_changes, ui16_hall_invalid, ui16_motor_speed_erps, i16_cur, ui8_gk_thr_min, ui8_gk_thr_max, ui8_gk_reset_flags, ui8_uptime, ui16_hall_erevs, ui16_hall_back, ui16_hall_seq_err, ui16_hall_masked, ui16_p6, ui8_position_correction_value, ui16_adc_read_battery_voltage(), lcd_configuration_variables.ui8_wheel_size, i16_gk_demand, ui8_gk_regen_target, ui16_gk_bemf_k_x256);
+#if GOKART_REVERSE_SWITCH
+#define GK_DIR_IN_USE ui8_gk_reverse
+#else
+#define GK_DIR_IN_USE 0
+#endif
+					printf("thr %u duty %u hall %d hc %u hi %u erps %u cur %d tmin %u tmax %u rst %u up %u rev %u hb %u hx %u hm %u p6 %u pc %u bv %u wz %u dm %d rt %u bk %u dir %u\r\n", ui8_adc_read_throttle(), ui16_setpoint, (int) hall_sensors, ui16_hall_changes, ui16_hall_invalid, ui16_motor_speed_erps, i16_cur, ui8_gk_thr_min, ui8_gk_thr_max, ui8_gk_reset_flags, ui8_uptime, ui16_hall_erevs, ui16_hall_back, ui16_hall_seq_err, ui16_hall_masked, ui16_p6, ui8_position_correction_value, ui16_adc_read_battery_voltage(), lcd_configuration_variables.ui8_wheel_size, i16_gk_demand, ui8_gk_regen_target, ui16_gk_bemf_k_x256, GK_DIR_IN_USE);
 #endif
 #endif
 					ui8_gk_thr_min = ui8_gk_thr_max = 0;

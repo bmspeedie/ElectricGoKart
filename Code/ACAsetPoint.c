@@ -30,6 +30,7 @@
 #include "brake.h"
 #include "adc.h" // FIXME ugly cross reference
 #include "motor.h"
+#include "gpio.h" // reverse switch
 #include "stm8s_tim1.h"
 
 static uint32_t ui32_dutycycle; // local version of setpoint
@@ -52,6 +53,10 @@ static uint8_t ui8_gk_regen_on = 0; // 1 while the regen loop owns the duty
 static int16_t i16_gk_regen_duty16 = 0; // regen loop duty, 1/16 duty
 static uint16_t ui16_gk_prev_setpoint = 0, ui16_gk_prev_erps = 0; // for the steady-state gate on BEMF learning
 static uint8_t ui8_gk_steady_ticks = 0;
+#if GOKART_REVERSE_SWITCH
+static uint8_t ui8_gk_rev_pending = 0; // last switch reading (1 = reverse)
+static uint8_t ui8_gk_rev_ticks = 0; // 50 Hz ticks that reading has held
+#endif
 #endif
 
 static int8_t uint_PWM_Enable = 0; //flag for PWM state
@@ -330,6 +335,26 @@ uint16_t aca_setpoint(uint16_t ui16_time_ticks_between_pas_interrupt, uint16_t s
             TIM1_CtrlPWMOutputs(DISABLE);
             uint_PWM_Enable = 0;
         }
+
+#if GOKART_REVERSE_SWITCH
+        // Reverse switch (PG0, low = reverse). Debounced, and applied only
+        // while the bridge is off (duty 0 this tick) and no electrical
+        // revolution has been seen for ~0.2 s, so a flip while rolling waits
+        // for the kart to stop with the pedal at zero torque.
+        {
+            uint8_t ui8_want = hard_boot_is_set() ? 1 : 0;
+            if (ui8_want != ui8_gk_rev_pending) {
+                ui8_gk_rev_pending = ui8_want;
+                ui8_gk_rev_ticks = 0;
+            } else if (ui8_gk_rev_ticks < 255) {
+                ui8_gk_rev_ticks++;
+            }
+            if (ui8_gk_rev_pending != ui8_gk_reverse && ui8_gk_rev_ticks >= GOKART_REVERSE_DEBOUNCE_TICKS
+                    && ui16_duty == 0 && ui16_motor_speed_erps == 0) {
+                motor_set_reverse(ui8_gk_rev_pending);
+            }
+        }
+#endif
         return ui16_duty;
     }
 #else

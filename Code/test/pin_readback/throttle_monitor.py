@@ -341,7 +341,7 @@ def lcd3_frames(data):
 REPORT_RE = re.compile(
     rb"thr (\d{1,3})(?: dr (\d{1,3}))? duty (\d{1,3}) hall (-?\d{1,2})"
     rb"(?: hc (\d{1,5}) hi (\d{1,5}) erps (\d{1,5}))?(?: ang (\d{1,3}))?(?: cur (-?\d{1,4}))?(?: tmin (\d{1,3}) tmax (\d{1,3}))?(?: rst (\d{1,3}) up (\d{1,3}))?(?: hold (\d{1,5}))?(?: rev (\d{1,5}) hb (\d{1,5}) hx (\d{1,5}))?(?: hm (\d{1,5}))?(?: p6 (\d{1,4}))?(?: p4 (\d{1,4}))?(?: pc (\d{1,3}))?(?: bv (\d{1,4}))?(?: wz (\d{1,3}))?"
-    rb"(?: dm (-?\d{1,3}))?(?: rt (\d{1,3}))?(?: bk (\d{1,5}))?\r?\n"
+    rb"(?: dm (-?\d{1,3}))?(?: rt (\d{1,3}))?(?: bk (\d{1,5}))?(?: dir ([01]))?\r?\n"
 )
 
 
@@ -387,6 +387,8 @@ def text_reports(data):
                 r["rt"] = int(m.group(25))  # regen motor-current target in use, PB6 counts (0 outside regen)
             if m.group(26) is not None:
                 r["bk"] = int(m.group(26))  # back-EMF constant in use, duty per erps x256
+            if m.group(27) is not None:
+                r["dir"] = int(m.group(27))  # 0 forward, 1 reverse (PG0 switch pulled low)
             yield r
 
 
@@ -462,6 +464,7 @@ def read_uart(hdwf):
             state["dm"] = parsed.get("dm", state.get("dm"))
             state["rt"] = parsed.get("rt", state.get("rt"))
             state["bk"] = parsed.get("bk", state.get("bk"))
+            state["dir"] = parsed.get("dir", state.get("dir"))
             state["uart_at"] = now
             if "hc" in parsed:
                 m = state["mcu"]
@@ -656,6 +659,7 @@ async function tick() {
     if (s.dm != null) parts.push(s.dm > 0 ? 'drive ' + Math.round(s.dm * 100 / 255) + '%' : (s.dm < 0 ? 'regen ' + Math.round(-s.dm * 100 / 255) + '%' + (s.rt != null ? ' (target ' + s.rt + ' cnt)' : '') : 'coast'));
     if (s.cur != null) parts.push('cur ' + s.cur + ' cnt');
     if (s.bk != null) parts.push('bemf k ' + (s.bk / 256).toFixed(2));
+    if (s.dir != null) parts.push(s.dir ? 'REVERSE' : 'forward');
     if (s.duty != null) parts.push('duty ' + s.duty);
     if (s.hall != null) parts.push('hall ' + s.hall);
     if (s.voltage_max != null) parts.push('peak ' + s.voltage_max.toFixed(2) + ' V');
@@ -758,6 +762,7 @@ class Handler(BaseHTTPRequestHandler):
                 "dm": snap.get("dm") if source == "controller" else None,
                 "rt": snap.get("rt") if source == "controller" else None,
                 "bk": snap.get("bk") if source == "controller" else None,
+                "dir": snap.get("dir") if source == "controller" else None,
                 "hall": snap["hall"] if source == "controller" else None,
                 "hold": snap.get("hold") if source == "controller" else None,
                 "position": position,

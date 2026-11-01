@@ -32,6 +32,19 @@ extern uint16_t ui16_PWM_cycles_counter_total;
 extern uint16_t ui16_iq_current_ma;
 extern uint16_t ui16_log;
 
+// Phase/hall A<->C exchange in use (see GOKART_SWAP_PHASE_AC in config.h).
+// Read by the hall sampling and the PWM output every PWM cycle.
+#ifndef GOKART_SWAP_PHASE_AC
+#define GOKART_SWAP_PHASE_AC 0
+#endif
+#if GOKART_REVERSE_SWITCH
+extern uint8_t ui8_gk_reverse; // 0 forward, 1 reverse (PG0 pulled low)
+#define GOKART_AC_SWAPPED() ((GOKART_SWAP_PHASE_AC) ^ ui8_gk_reverse)
+void motor_direction_init (void);
+void motor_set_reverse (uint8_t ui8_rev);
+#else
+#define GOKART_AC_SWAPPED() (GOKART_SWAP_PHASE_AC)
+#endif
 
 void hall_sensor_init (void);
 void hall_sensors_read_and_action (void);

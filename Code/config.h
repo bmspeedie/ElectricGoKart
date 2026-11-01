@@ -66,9 +66,34 @@
 // Go-Kart specific modifications
 #define GOKART_MODE 1  // Enable go-kart mode
 // Spare controller wires are ignored: brake (PA4), cruise (PA2), self-study
-// (PA5), low/high (PB3), 3-speed (PG1), hard boot (PG0). None of them can
-// hold startup, cut drive, or change a mode.
+// (PA5), low/high (PB3), 3-speed (PG1). None of them can hold startup, cut
+// drive, or change a mode. The hard boot wire (PG0) is the reverse switch,
+// see GOKART_REVERSE_SWITCH.
 #define GOKART_IGNORE_AUX_INPUTS 1
+// Reverse switch on the "hard boot" input (PG0). The pin has the MCU
+// pull-up and idles high = forward; pulled to ground = reverse. The pin is
+// read at boot and then every 50 Hz tick; a change must hold for
+// DEBOUNCE_TICKS (5 = 100 ms) and is only applied with the bridge off and
+// the motor stopped (no electrical revolution for ~0.2 s), so flipping the
+// switch while rolling does nothing until the kart has stopped and the
+// pedal is at zero torque. "dir" in the telemetry is the direction in use.
+#define GOKART_REVERSE_SWITCH 1
+#define GOKART_REVERSE_DEBOUNCE_TICKS 5
+// Commutation offset (ui8_s_motor_angle) used in reverse. Reverse undoes the
+// A<->C swap below, which mirrors the stator angle about phase B, and keeps
+// the hall table (it is mirror-symmetric: ANGLE_6_60 + ANGLE_1_240 =
+// ANGLE_2_120 + ANGLE_3_180 = 198, as it must be for 120 deg spaced
+// sensors). The forward offset M fixes the field relative to the hall
+// edges; the rotor's own position relative to the hall edges cancels in
+// forward but counts double in reverse, so M cannot be mirrored on its own.
+// If forward runs the field D units ahead of the rotor flux, the reverse
+// offset is 2*D - M - 70 (mod 256). With D = 64 (90 deg) + a that gives
+// 112 + 2a for M = 202. The forward sweep put the current minimum at 186
+// and the clean window at 190-210, so a is 0..16 and the reverse offset
+// 112..144; 128 is the middle. Confirm on the bench with GOKART_ANGLE_SWEEP
+// (set START/END around this value, run the sweep with the switch in
+// reverse): the FOC correction only absorbs +/-16 units.
+#define GOKART_REVERSE_MOTOR_ANGLE 128
 #define GOKART_MAX_SPEED_KPH 80  // Maximum speed for go-kart
 #define GOKART_THROTTLE_DIRECT 1  // Direct throttle mapping without ramping
 // One-pedal throttle geometry. The usable travel is the ADC_THROTTLE_MIN/MAX
@@ -181,6 +206,8 @@
 // hall base angles step backwards while the 60-degree interpolation steps
 // forwards. Swapping phase A<->C and hall A<->C in software (same as
 // swapping two motor wires and two hall wires) makes the sequence forward.
+// 1 or 0. The reverse switch inverts this at run time (motor.h,
+// GOKART_AC_SWAPPED).
 #define GOKART_SWAP_PHASE_AC 1
 // Hall edge bounce rejection. Bench, 31 Oct: the MCU saw 1.91 hall changes
 // per expected change (21019 over 1837 electrical revs), 4996 of them steps

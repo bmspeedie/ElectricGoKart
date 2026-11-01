@@ -88,19 +88,41 @@ void hall_sensor_init(void) {
 	GPIO_Init(HALL_SENSOR_C__PORT, HALL_SENSOR_C__PIN, GPIO_MODE_IN_FL_NO_IT);
 }
 
+#if GOKART_REVERSE_SWITCH
+uint8_t ui8_gk_reverse = 0;
+static uint8_t ui8_gk_fwd_motor_angle = 0; // ui8_s_motor_angle as configured (forward)
+
+// Capture the forward commutation offset and take the direction from the
+// switch. Called once at start-up, after the controller state (EEPROM) is
+// loaded and before the first hall read.
+void motor_direction_init(void) {
+	ui8_gk_fwd_motor_angle = ui8_s_motor_angle;
+	motor_set_reverse(hard_boot_is_set());
+}
+
+// Select the direction: exchanges hall A<->C and phase A<->C (see
+// GOKART_AC_SWAPPED) and loads the matching commutation offset. Only to be
+// called with the bridge off and the motor stopped; the hall state is
+// re-evaluated under the new mapping on the next PWM cycle.
+void motor_set_reverse(uint8_t ui8_rev) {
+	ui8_gk_reverse = ui8_rev ? 1 : 0;
+	ui8_s_motor_angle = ui8_gk_reverse ? GOKART_REVERSE_MOTOR_ANGLE : ui8_gk_fwd_motor_angle;
+	hall_sensors_last = 0;
+	ui8_hall_prev_read = 0;
+}
+#endif
+
 void hall_sensors_read_and_action(void) {
 	// read hall sensors signal pins from individual ports (updated for new hardware)
-#ifdef GOKART_SWAP_PHASE_AC
-	// hall A and C exchanged to match the phase A<->C swap in pwm.c
-	uint8_t hall_a = (GPIO_ReadInputData(HALL_SENSOR_C__PORT) & HALL_SENSOR_C__PIN) ? 1 : 0;
-	uint8_t hall_b = (GPIO_ReadInputData(HALL_SENSOR_B__PORT) & HALL_SENSOR_B__PIN) ? 2 : 0;
-	uint8_t hall_c = (GPIO_ReadInputData(HALL_SENSOR_A__PORT) & HALL_SENSOR_A__PIN) ? 4 : 0;
-#else
 	uint8_t hall_a = (GPIO_ReadInputData(HALL_SENSOR_A__PORT) & HALL_SENSOR_A__PIN) ? 1 : 0;
 	uint8_t hall_b = (GPIO_ReadInputData(HALL_SENSOR_B__PORT) & HALL_SENSOR_B__PIN) ? 2 : 0;
 	uint8_t hall_c = (GPIO_ReadInputData(HALL_SENSOR_C__PORT) & HALL_SENSOR_C__PIN) ? 4 : 0;
-#endif
-	hall_sensors = hall_a | hall_b | hall_c;
+	if (GOKART_AC_SWAPPED()) {
+		// hall A and C exchanged to match the phase A<->C swap in pwm.c
+		hall_sensors = (hall_c >> 2) | hall_b | (hall_a << 2);
+	} else {
+		hall_sensors = hall_a | hall_b | hall_c;
+	}
 #if GOKART_HALL_LOCKOUT_PCT > 0
 	// Edge lockout: after an accepted change, hold the accepted state for a
 	// fixed fraction of the measured electrical revolution so the sensor's
