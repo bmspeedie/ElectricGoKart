@@ -48,4 +48,9 @@ Final Notes:
 
 - The motor is rated to 1.5kW at 60V. We have a nominal 72V battery, that float charges at 84V. The controller is rated for 3kW. So the motor is the weak link. It should be able to tolerate short term overloads, but will overheat fairly quickly at sustained full throttle (say 10 seconds from cold, 5 from warm?). So be careful with your lead foot.
 
-- 
+- There are 3 types fo fire extinguisher worth considering
+    - F500 are for lithium battery fires. Expensive, and probbaly unnecessary
+    - ABE powder good general purpose option. Won't extingush the battery directly, but good at stopping it spreading. Highly corrosive, so will damage the go kart
+    - Water. Good low cost option. Useless on the battery itself, but can be sprayed on nearby grass to stop it spreading.
+
+We should try to have at least one 4.5kg ABE on hand, and a heap of water. If the battery goes up it will explode, then burn for a while then eventually just go out. So main priorities are preventing any injury from the initial explosion, then stoppign anythign spreading while it burns out. Most problems with lithium are from people wasting their extinguisher on the battery itself and not having anything to stop the subsequent grass fire when the flames take over again.

@@ -56,6 +56,97 @@ yellow = tx, green = rx): bring the two into line.
 - [ ] Battery: big red = battery +, big black = battery -. "E-lock" powers
       the controller; switch it to battery + when ready to run.
 
+## STM8S105S LQFP44
+
+Top view, package rotated so pin 1 (NRST) and the dot are at the lower
+right. Numbers run counterclockwise. This is the 44-pin 10×10 mm part,
+which has PG0 and PG1. Probe the STM8 pins, not the motor phase wires or
+battery positive.
+
+Top edge, left to right:
+
+| Pin | Port | Signal |
+| --- | ---- | ------ |
+| 22 | PE6 | unused |
+| 21 | PB0 | phase A low-side PWM |
+| 20 | PB1 | phase B low-side PWM |
+| 19 | PB2 | phase C low-side PWM |
+| 18 | PB3 | low/high |
+| 17 | PB4 | filtered current |
+| 16 | PB5 | battery voltage |
+| 15 | PB6 | unfiltered current |
+| 14 | PB7 | throttle |
+| 13 | VSSA | analog ground |
+| 12 | VDDA | analog supply |
+
+Left edge, top to bottom:
+
+| Pin | Port | Signal |
+| --- | ---- | ------ |
+| 23 | PE5 | hall A |
+| 24 | PC1 | phase A high-side PWM |
+| 25 | PC2 | phase B high-side PWM |
+| 26 | PC3 | phase C high-side PWM |
+| 27 | PC5 | hall B |
+| 28 | VSSIO | I/O ground |
+| 29 | VDDIO | I/O supply |
+| 30 | PC6 | back EMF phase C |
+| 31 | PC7 | unused |
+| 32 | PG0 | hard boot |
+| 33 | PG1 | 3 speed |
+
+Bottom edge, left to right. Pin 38 is also SWIM.
+
+| Pin | Port | Signal |
+| --- | ---- | ------ |
+| 34 | PE2 | unused |
+| 35 | PE1 | back EMF phase A |
+| 36 | PE0 | unused |
+| 37 | PD0 | unused |
+| 38 | PD1 | unused (SWIM) |
+| 39 | PD2 | back EMF phase B |
+| 40 | PD3 | hall C |
+| 41 | PD4 | back EMF enable |
+| 42 | PD5 | display serial TX |
+| 43 | PD6 | unused |
+| 44 | PD7 | unused |
+
+Right edge, top to bottom. Pin 1 is the bottom pin. Pin 6 is the 1.8 V
+regulator capacitor, not a GPIO.
+
+| Pin | Port | Signal |
+| --- | ---- | ------ |
+| 11 | PA6 | unused |
+| 10 | PA5 | self study |
+| 9 | PA4 | reverse |
+| 8 | VDDIO | I/O supply |
+| 7 | VDD | digital supply |
+| 6 | VCAP | 1.8 V capacitor |
+| 5 | VSS | digital ground |
+| 4 | VSSIO | I/O ground |
+| 3 | PA2 | cruise |
+| 2 | PA1 | unused (oscillator in) |
+| 1 | NRST | reset |
+
+Analog Discovery 2, all digital pins as inputs. Ground is pin 5 (VSS) or
+pin 13 (VSSA). Leave the waveform outputs and V+/V− unconnected. Scope
+range ±5 V; logic sample rate 1 MS/s is enough for the 15.6 kHz PWM.
+
+| Discovery | Package pin | Signal |
+| --------- | ----------- | ------ |
+| GND, scope 1− and 2− | 5 or 13 | logic ground |
+| Scope 1+ (orange) | 14 PB7 | throttle |
+| Scope 2+ (blue) | 15 PB6 | unfiltered current |
+| DIO 0 | 21 PB0 | phase A low-side PWM |
+| DIO 1 | 20 PB1 | phase B low-side PWM |
+| DIO 2 | 19 PB2 | phase C low-side PWM |
+| DIO 3 | 24 PC1 | phase A high-side PWM |
+| DIO 4 | 25 PC2 | phase B high-side PWM |
+| DIO 5 | 26 PC3 | phase C high-side PWM |
+| DIO 6 | 23 PE5 | hall A |
+| DIO 7 | 27 PC5 | hall B |
+| DIO 8 | 40 PD3 | hall C |
+
 ## Full-load test checklist
 
 Tuned aggressively for maximum torque and throttle response, but only ever
