@@ -1,0 +1,51 @@
+TODO
+
+1. Controller Screws:
+
+- to bolt from heatsink to case (M4 machine?)
+- To bolt extrusion end caps (M3 self tapper)
+
+2. Motor Wiring
+
+Large green/blue/yellow to green/blue/yellow on controller
+
+Small red/black/green/blue/yellow to red/black/green/blue/yellow on controller marked "hall". This is the angular positon sensor, like a crank position sensor on a car. This connector is pretty crap, consider directl solderign or a different type of connector
+
+3. Display Wiring (Cat 6 cable)
+nred (display) = green (cat 6)
+black (display) = green/white
+green (data into display) = orange
+yellow (data from display) = orange/white
+blue = not connected
+
+4. Programmer Wiring (only needed when setting up or for tuning)
+
+yellow (5V) = brown (cat 6)
+green (gnd) = green/white, shared with the display ground (cat 6)
+purple (clk) = blue (cat 6)
+blue (swim) = brown/white (cat 6)
+
+5. Throttle Wiring
+
+black/red/green on controller goes to black/red/green on hand throttle for initial testing. Then, connect to the draw wire encoder to actually sense the throttle ont he go kart. We will need to recalibrate the throttle positions when moving to the draw wire encoder so that we have:
+0% throttle = full regen
+30% throttle = no torque
+100% throttle = 100% torque
+
+6. Power Wiring
+
+Large red/black on controller goes to battery
+
+"E-Lock" on controlelr also goes to battery red. This is the axillary supply to the controller to actually turn it on.
+
+"Hard-boot" si the only other connection. Leave it open for anticlockwise spinning, closed for clockwise spinning
+
+
+
+Final Notes:
+
+- The motor has been agressively tuned for maximum performance and throttle response, but is on a knife edge for stability. It is likely once it is bolted to the axle, the load/intertia/mechanical resonance will change the system from free wheeling on the bench, so we will need to retune on the kart itself.
+
+- The motor is rated to 1.5kW at 60V. We have a nominal 72V battery, that float charges at 84V. The controller is rated for 3kW. So the motor is the weak link. It should be able to tolerate short term overloads, but will overheat fairly quickly at sustained full throttle (say 10 seconds from cold, 5 from warm?). So be careful with your lead foot.
+
+- 
